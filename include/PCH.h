@@ -8,9 +8,7 @@
 #pragma warning(push)
 #include "F4SE/F4SE.h"
 #include "RE/Fallout.h"
-#if defined(FALLOUT_POST_NG)
-#include "REX/REX/Singleton.h"
-#endif
+#include "REX/REX.h"
 #pragma warning(pop)
 
 #include "Windows.h"
@@ -37,23 +35,87 @@ using uint = uint32_t;
 #else
 #	include <spdlog/sinks/msvc_sink.h>
 #endif
+#include <spdlog/spdlog.h>
 
 
 
 #define DLLEXPORT __declspec(dllexport)
 
-namespace logger = F4SE::log;
+namespace logger
+{
+	template <class... Args>
+	void trace(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Trace, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void trace(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Trace, a_msg);
+	}
+
+	template <class... Args>
+	void debug(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Debug, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void debug(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Debug, a_msg);
+	}
+
+	template <class... Args>
+	void info(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Info, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void info(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Info, a_msg);
+	}
+
+	template <class... Args>
+	void warn(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Warning, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void warn(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Warning, a_msg);
+	}
+
+	template <class... Args>
+	void error(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Error, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void error(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Error, a_msg);
+	}
+
+	template <class... Args>
+	void critical(std::format_string<Args...> a_fmt, Args&&... a_args)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Critical, a_fmt, std::forward<Args>(a_args)...);
+	}
+
+	inline void critical(std::string_view a_msg)
+	{
+		REX::Impl::Log(std::source_location::current(), REX::ELogLevel::Critical, a_msg);
+	}
+}
 
 namespace stl
 {
-	using namespace F4SE::stl;
-
 	template <class T>
 	void write_thunk_call(std::uintptr_t a_src)
 	{
-		F4SE::AllocTrampoline(14);
-
-		auto& trampoline = F4SE::GetTrampoline();
+		auto& trampoline = REL::GetTrampoline();
 		T::func = trampoline.write_call<5>(a_src, T::thunk);
 	}
 
