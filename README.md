@@ -1,79 +1,106 @@
-# Skyrim Community Shaders
+# Disclaimer: This is an AI slop generated with codex and love
 
-SKSE core plugin for community-driven advanced graphics modifications.
+# Fallout 4 Upscaling
 
-[Nexus](https://www.nexusmods.com/skyrimspecialedition/mods/86492)
+F4SE plugin for Fallout 4 that experiments with modern upscaling and frame generation in the game renderer.
+
+This repository is a native C++ plugin built with xmake and CommonLibF4. It hooks the Fallout 4 render pipeline, creates a D3D12 proxy swapchain when needed, and integrates:
+
+- NVIDIA Streamline 2.11.1 for DLSS, DLSS-G, and Reflex.
+- AMD FidelityFX SDK 2.2.0 for FSR upscaling and frame generation.
+- Custom D3D11 compute shaders for depth, motion vector, and frame-generation input preparation.
+
+The `package/` directory contains the loose files that are meant to be installed under the game `Data/` directory.
+
+## Repository Layout
+
+- `src/` - plugin source.
+- `include/` - local headers and prebuilt Detours library.
+- `lib/commonlibf4/` - CommonLibF4 submodule.
+- `extern/Streamline/` - NVIDIA Streamline SDK checkout, tag `v2.11.1`.
+- `extern/FidelityFX-SDK/` - AMD FidelityFX SDK checkout, tag `v2.2.0`.
+- `package/` - runtime plugin files, shaders, configuration, and bundled runtime DLLs.
+- `ref/` - reference material used while developing this port; not required to build.
 
 ## Requirements
 
-- Any terminal of your choice (e.g., PowerShell)
-- [Visual Studio Community 2022](https://visualstudio.microsoft.com/)
-  - Desktop development with C++
-- [CMake](https://cmake.org/)
-  - Edit the `PATH` environment variable and add the cmake.exe install path as a new value
-  - Instructions for finding and editing the `PATH` environment variable can be found [here](https://www.java.com/en/download/help/path.html)
-- [Git](https://git-scm.com/downloads)
-  - Edit the `PATH` environment variable and add the Git.exe install path as a new value
-- [Vcpkg](https://github.com/microsoft/vcpkg)
-  - Install vcpkg using the directions in vcpkg's [Quick Start Guide](https://github.com/microsoft/vcpkg#quick-start-windows)
-  - After install, add a new environment variable named `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
+- Windows x64.
+- Visual Studio 2022 with **Desktop development with C++**.
+- Git.
+- [xmake](https://xmake.io/).
 
-## User Requirements
+xmake will fetch these package dependencies automatically:
 
-- [Address Library for SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
-  - Needed for SSE/AE
-- [VR Address Library for SKSEVR](https://www.nexusmods.com/skyrimspecialedition/mods/58101)
-  - Needed for VR
+- `directxtk`
+- `directx-headers`
+- `magic_enum`
+- `simpleini`
 
-## Register Visual Studio as a Generator
+## External SDK Setup
 
-- Open `x64 Native Tools Command Prompt`
-- Run `cmake`
-- Close the cmd window
+The build expects the SDKs at exact folder names under `extern/`.
 
-## Clone and Build
-Open terminal (e.g., PowerShell) and run the following commands:
+From the repository root:
 
-```
-git clone https://github.com/doodlum/skyrim-community-shaders.git --recursive
-cd skyrim-community-shaders
-.\BuildRelease.bat
+```powershell
+New-Item -ItemType Directory -Force extern
+
+git clone --branch v2.11.1 --depth 1 https://github.com/NVIDIA-RTX/Streamline extern/Streamline
+
+git clone --branch v2.2.0 --depth 1 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK extern/FidelityFX-SDK
 ```
 
-### CMAKE Options (optional)
-If you want an example CMakeUserPreset to start off with you can copy the `CMakeUserPresets.json.template` -> `CMakeUserPresets.json`
-#### AUTO_PLUGIN_DEPLOYMENT
-* This option is default `"OFF"`
-* Make sure `"AUTO_PLUGIN_DEPLOYMENT"` is set to `"ON"` in `CMakeUserPresets.json`
-* Change the `"CommunityShadersOutputDir"` value to match your desired outputs, if you want multiple folders you can separate them by `;` is shown in the template example
-#### AIO_ZIP_TO_DIST
-* This option is default `"ON"`
-* Make sure `"AIO_ZIP_TO_DIST"` is set to `"ON"` in `CMakeUserPresets.json`
-* This will create a `CommunityShaders_AIO.7z` archive in /dist containing all features and base mod
-#### ZIP_TO_DIST
-* This option is default `"ON"`
-* Make sure `"ZIP_TO_DIST"` is set to `"ON"` in `CMakeUserPresets.json`
-* This will create a zip for each feature and one for the base Community shaders in /dist containing
-#### TRACY_SUPPORT
-* This option is default `"OFF"`
-* This will enable tracy support, might need to delete build folder when this option is changed
+The paths must resolve to:
 
+```text
+extern/Streamline/include
+extern/FidelityFX-SDK/Kits/FidelityFX/api/include
+extern/FidelityFX-SDK/Kits/FidelityFX/backend/dx12
+extern/FidelityFX-SDK/Kits/FidelityFX/upscalers/include
+extern/FidelityFX-SDK/Kits/FidelityFX/framegeneration/include
+extern/FidelityFX-SDK/Kits/FidelityFX/framegeneration/include/dx12
+extern/FidelityFX-SDK/Kits/FidelityFX/signedbin
+```
 
-When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
-`.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
+The xmake target links against `amd_fidelityfx_loader_dx12.lib` from `extern/FidelityFX-SDK/Kits/FidelityFX/signedbin` and copies these runtime DLLs into the build output after a successful build:
 
-When switching between different presets you might need to remove the build folder
+- `amd_fidelityfx_loader_dx12.dll`
+- `amd_fidelityfx_upscaler_dx12.dll`
+- `amd_fidelityfx_framegeneration_dx12.dll`
+
+## CommonLibF4 Submodule
+
+Initialize the CommonLibF4 submodule before building:
+
+```powershell
+git submodule update --init --recursive
+```
+
+If this repository was copied without `.git`, make sure `lib/commonlibf4` exists and contains the CommonLibF4 xmake project.
+
+## Build
+
+```powershell
+xmake f -m releasedbg
+xmake build Upscaling
+```
+
+The plugin DLL is produced under:
+
+```text
+build/windows/x64/releasedbg/Upscaling.dll
+```
+
+## Runtime Files
+
+Install the contents of `package/` into the game `Data/` folder, and install the built `Upscaling.dll` into:
+
+```text
+Data/F4SE/Plugins/Upscaling.dll
+```
+
+The package includes shader files under `Data/F4SE/Plugins/Upscaling/` and `Data/F4SE/Plugins/FrameGeneration/`. These are compiled at runtime by the plugin, so keep them with the installed mod.
 
 ## License
 
-### Default
-
-[GPL-3.0-or-later](COPYING) WITH [Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)](EXCEPTIONS.md).  
-Specifically, the Modded Code is Skyrim (and its variants) and Modding Libraries include [SKSE](https://skse.silverlock.org/) and Commonlib (and variants).
-
-### Shaders
-
-See LICENSE within each directory; if none, it's [Default](#default)
-
-- [Features Shaders](features)
-- [Package Shaders](package/Shaders/)
+This project is licensed under GPL-3.0. See [LICENSE](LICENSE) and [EXCEPTIONS](EXCEPTIONS).
