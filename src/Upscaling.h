@@ -69,7 +69,7 @@ public:
 		kDLSS       ///< NVIDIA Deep Learning Super Sampling
 	};
 
-	static constexpr bool kForceFSRFrameGenerationForTesting = true;
+	static constexpr bool kForceFSRFrameGenerationForTesting = false;
 
 	/**
 	 * @struct Settings
