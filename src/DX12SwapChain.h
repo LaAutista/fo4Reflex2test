@@ -122,6 +122,7 @@ private:
 	winrt::com_ptr<ID3D12Fence> commandFence;
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
 	std::unique_ptr<Texture2D> swapChainBufferProxy;
+	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferProxyENB;
 	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferWrapped[2];
 	DXGISwapChainProxy* swapChainProxy = nullptr;
 	UINT frameIndex = 0;

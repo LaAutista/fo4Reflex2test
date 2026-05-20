@@ -952,7 +952,7 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture
 	}
 }
 
-bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, bool* a_sharpened)
+bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12Resource* a_transparencyMask, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, bool* a_sharpened)
 {
 	std::ignore = a_colorFormat;
 	std::ignore = a_motionVectorFormat;
@@ -1002,14 +1002,19 @@ bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputC
 	sl::Resource colorOut = { sl::ResourceType::eTex2d, a_outputColor, nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON };
 	sl::Resource depth = { sl::ResourceType::eTex2d, a_depth, nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON };
 	sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectors, nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON };
+	sl::Resource biasCurrentColor = { sl::ResourceType::eTex2d, a_transparencyMask, nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON };
+	sl::Resource transparency = { sl::ResourceType::eTex2d, a_transparencyMask, nullptr, nullptr, D3D12_RESOURCE_STATE_COMMON };
 
 	sl::ResourceTag colorInTag = { &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
 	sl::ResourceTag colorOutTag = { &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &fullExtent };
 	sl::ResourceTag depthTag = { &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
 	sl::ResourceTag mvecTag = { &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
+	sl::ResourceTag biasCurrentColorTag = { &biasCurrentColor, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
+	sl::ResourceTag transparencyTag = { &transparency, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
 
-	sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag };
-	if (SL_FAILED(result, slSetTagForFrame(*a_frameToken, viewport, resourceTags, _countof(resourceTags), a_commandList))) {
+	sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, biasCurrentColorTag, transparencyTag };
+	const auto numResourceTags = static_cast<uint32_t>(a_transparencyMask ? _countof(resourceTags) : _countof(resourceTags) - 2);
+	if (SL_FAILED(result, slSetTagForFrame(*a_frameToken, viewport, resourceTags, numResourceTags, a_commandList))) {
 		logger::warn("[Streamline] Could not tag D3D12 DLSS resources: {}", magic_enum::enum_name(result));
 		return false;
 	}

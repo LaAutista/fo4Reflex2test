@@ -312,6 +312,7 @@ public:
 	ID3D11ComputeShader* GetOverrideDepthCS();
 	ID3D11ComputeShader* GetCopyDepthToFrameGenerationCS();
 	ID3D11ComputeShader* GetGenerateFrameGenerationBuffersCS();
+	ID3D11ComputeShader* GetGenerateDLSSTransparencyMaskCS();
 
 	/**
 	 * @brief Get or compile custom SSR raytracing pixel shader
@@ -369,6 +370,7 @@ public:
 	std::array<std::unique_ptr<Texture2D>, 2> dlssgMotionVectorSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> dlssgDepthSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> dlssgUIColorAlphaSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, 2> dlssTransparencyMaskSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> fsrInputSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> fsrOutputSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> fsrMotionVectorSharedTextures;
@@ -381,6 +383,7 @@ public:
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgMotionVectorD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgDepthD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgUIColorAlphaD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssTransparencyMaskD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrInputD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrOutputD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrMotionVectorD3D12;
@@ -393,6 +396,7 @@ public:
 	std::array<uint32_t, 2> dlssgInputFrameTokenIndices{};
 	std::array<bool, 2> dlssD3D12InputsReady{};
 	std::array<bool, 2> dlssD3D12Sharpened{};
+	std::array<bool, 2> dlssD3D12TransparencyMaskReady{};
 	std::array<DXGI_FORMAT, 2> dlssD3D12ColorFormats{};
 	std::array<DXGI_FORMAT, 2> dlssD3D12MotionVectorFormats{};
 	std::array<DXGI_FORMAT, 2> dlssD3D12DepthFormats{};
@@ -428,13 +432,17 @@ private:
 	winrt::com_ptr<ID3D11ComputeShader> overrideDepthCS;             ///< Depth copy shader
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthToFrameGenerationCS;  ///< Depth copy shader for frame generation inputs
 	winrt::com_ptr<ID3D11ComputeShader> generateFrameGenerationBuffersCS;  ///< Motion/depth reticle fix shader for frame generation inputs
+	winrt::com_ptr<ID3D11ComputeShader> generateDLSSTransparencyMaskCS;  ///< DLSS transparency/history rejection mask
 	winrt::com_ptr<ID3D11PixelShader> BSImagespaceShaderSSLRRaytracing;  ///< Custom SSR shader
 
 	std::unique_ptr<Texture2D> frameGenerationPreAlphaTexture;
 	std::unique_ptr<Texture2D> frameGenerationMotionVectorTexture;
 	std::unique_ptr<Texture2D> frameGenerationDepthTexture;
+	std::unique_ptr<Texture2D> dlssTransparencyMaskTexture;
 	bool frameGenerationBuffersReady = false;
 	uint32_t frameGenerationBuffersFrame = 0;
+	bool dlssTransparencyMaskReady = false;
+	uint32_t dlssTransparencyMaskFrame = 0;
 
 	bool WantsFrameGenerationInputs();
 	bool EnsureFrameGenerationPatchResources(float2 a_renderSize, DXGI_FORMAT a_colorResourceFormat, DXGI_FORMAT a_colorSRVFormat, DXGI_FORMAT a_motionVectorFormat);

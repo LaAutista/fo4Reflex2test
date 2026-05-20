@@ -16,14 +16,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		return;
 	}
 
-	float3 colorPreAlpha = InputTexturePreAlpha[DTid.xy].xyz;
-	float3 colorPostAlpha = InputTextureAfterAlpha[DTid.xy].xyz;
-	float depth = InputDepth[DTid.xy];
+    float alphaPre = InputTexturePreAlpha[DTid.xy].w;
+    float alphaPost = InputTextureAfterAlpha[DTid.xy].w;
+    float depth = InputDepth[DTid.xy];
 
-	float3 difference = abs(colorPreAlpha - colorPostAlpha);
-	float mask = max(difference.x, max(difference.y, difference.z));
-	mask *= 1000.0;
-	mask = 1.0 - saturate(mask);
+    float mask = abs(alphaPre - alphaPost);
+    mask *= 1000.0;
+    mask = 1.0 - saturate(mask);
 
 	OutputMotionVectors[DTid.xy] = lerp(0.0, InputMotionVectors[DTid.xy], mask);
 	OutputDepth[DTid.xy] = lerp(min(depth, 0.1), depth, mask);

@@ -7,6 +7,8 @@
 #include "Streamline.h"
 #include "Upscaling.h"
 
+extern bool enbLoaded;
+
 namespace
 {
 	double QueryDesktopRefreshHz(IDXGISwapChain* a_swapChain)
@@ -113,40 +115,6 @@ namespace
 		return desc;
 	}
 
-	void UpdateCursorClip(IDXGISwapChain4* a_swapChain)
-	{
-		if (!a_swapChain) {
-			ClipCursor(nullptr);
-			return;
-		}
-
-		HWND hwnd = nullptr;
-		if (FAILED(a_swapChain->GetHwnd(&hwnd)) || !hwnd || GetForegroundWindow() != hwnd) {
-			ClipCursor(nullptr);
-			return;
-		}
-
-		RECT clipRect{};
-		if (!GetClientRect(hwnd, &clipRect)) {
-			ClipCursor(nullptr);
-			return;
-		}
-
-		POINT topLeft{ clipRect.left, clipRect.top };
-		POINT bottomRight{ clipRect.right, clipRect.bottom };
-		if (!ClientToScreen(hwnd, &topLeft) || !ClientToScreen(hwnd, &bottomRight)) {
-			ClipCursor(nullptr);
-			return;
-		}
-
-		clipRect = { topLeft.x, topLeft.y, bottomRight.x, bottomRight.y };
-		if (clipRect.right <= clipRect.left || clipRect.bottom <= clipRect.top) {
-			ClipCursor(nullptr);
-			return;
-		}
-
-		ClipCursor(&clipRect);
-	}
 }
 
 D3D11D3D12SharedTexture::D3D11D3D12SharedTexture(const D3D11_TEXTURE2D_DESC& a_desc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
@@ -450,9 +418,15 @@ void DX12SwapChain::CreateInterop()
 	textureDesc.Usage = D3D11_USAGE_DEFAULT;
 	textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 
-	winrt::com_ptr<ID3D11Texture2D> proxyTexture;
-	DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&textureDesc, nullptr, proxyTexture.put()));
-	swapChainBufferProxy = std::make_unique<Texture2D>(proxyTexture.detach());
+	if (enbLoaded) {
+		swapChainBufferProxyENB = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
+		swapChainBufferProxy = nullptr;
+	} else {
+		winrt::com_ptr<ID3D11Texture2D> proxyTexture;
+		DX::ThrowIfFailed(d3d11Device->CreateTexture2D(&textureDesc, nullptr, proxyTexture.put()));
+		swapChainBufferProxy = std::make_unique<Texture2D>(proxyTexture.detach());
+		swapChainBufferProxyENB = nullptr;
+	}
 	swapChainBufferWrapped[0] = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
 	swapChainBufferWrapped[1] = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
 }
@@ -480,7 +454,15 @@ void DX12SwapChain::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
 
 HRESULT DX12SwapChain::GetBuffer(UINT, REFIID a_riid, void** a_surface)
 {
-	if (!a_surface || !swapChainBufferProxy) {
+	if (!a_surface) {
+		return E_POINTER;
+	}
+
+	if (swapChainBufferProxyENB) {
+		return swapChainBufferProxyENB->resource11->QueryInterface(a_riid, a_surface);
+	}
+
+	if (!swapChainBufferProxy) {
 		return E_POINTER;
 	}
 
@@ -501,7 +483,14 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	}
 	lastAppPresentStart = appPresentStart;
 
-	d3d11Context->CopyResource(swapChainBufferWrapped[frameIndex]->resource11.get(), swapChainBufferProxy->resource.get());
+	auto streamline = Streamline::GetSingleton();
+	streamline->ApplyPendingDLSSGDisable();
+
+	if (swapChainBufferProxyENB) {
+		d3d11Context->CopyResource(swapChainBufferWrapped[frameIndex]->resource11.get(), swapChainBufferProxyENB->resource11.get());
+	} else {
+		d3d11Context->CopyResource(swapChainBufferWrapped[frameIndex]->resource11.get(), swapChainBufferProxy->resource.get());
+	}
 	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
 	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
 	++fenceValue;
@@ -545,19 +534,16 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), commandFenceValue));
 	commandAllocatorFenceValues[frameIndex] = commandFenceValue++;
 
-	auto streamline = Streamline::GetSingleton();
 	const auto fidelityFXFrameGenerationActive = FidelityFX::GetSingleton()->IsFrameGenerationSwapChainActive();
 	const auto dlssgPresentSafety = streamline->NeedsDLSSGPresentSafety();
 	const auto presentSyncInterval = (dlssgPresentSafety || fidelityFXFrameGenerationActive) ? 0u : SyncInterval;
 	const auto presentFlags = dlssgPresentSafety ? (Flags & ~DXGI_PRESENT_ALLOW_TEARING) : Flags;
-	UpdateCursorClip(swapChain.get());
 	streamline->OnPresentStart();
 	const auto presentStart = std::chrono::steady_clock::now();
 	const auto result = swapChain->Present(presentSyncInterval, presentFlags);
 	const auto presentEnd = std::chrono::steady_clock::now();
 	streamline->OnPresentEnd(result, false);
 	if (SUCCEEDED(result)) {
-		streamline->ApplyPendingDLSSGDisable();
 		streamline->OnDLSSGPresentComplete();
 	}
 	if (FAILED(result)) {

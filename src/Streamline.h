@@ -146,7 +146,7 @@ public:
 	 * The upscaled result is written back to a_color texture.
 	 */
 	void Upscale(Texture2D* a_color, Texture2D* a_outputColor, Texture2D* a_dilatedMotionVectorTexture, float2 a_jitter, float2 a_renderSize, float2 a_displaySize, uint a_qualityMode, float a_sharpness);
-	bool UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, bool* a_sharpened);
+	bool UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12Resource* a_transparencyMask, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, bool* a_sharpened);
 
 	/**
 	 * @brief Update Streamline constants for current frame

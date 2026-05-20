@@ -229,6 +229,12 @@ void FidelityFX::CopyOpaqueTexture()
 
 	if (recreate) {
 		colorOpaqueOnlyTexture = std::make_unique<Texture2D>(sourceDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = sourceDesc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+		colorOpaqueOnlyTexture->CreateSRV(srvDesc);
 	}
 
 	d3d11Context->CopyResource(colorOpaqueOnlyTexture->resource.get(), source);
