@@ -1,2 +1,14 @@
 /build
 /dist
+
+# dot folders
+.cache/
+.idea/
+.vs/
+.vscode/
+.xmake/
+
+# folders
+build*/
+vs*/
+extern*/
