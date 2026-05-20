@@ -534,6 +534,7 @@ void Streamline::UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGene
 	sl::DLSSGOptions options{};
 	options.mode = mode;
 	options.numFramesToGenerate = generatedFrames;
+	options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff | sl::DLSSGFlags::eEnableFullscreenMenuDetection;
 	options.dynamicTargetFrameRate = static_cast<float>(dynamicTargetFPS);
 	options.numBackBuffers = swapChainDesc.BufferCount ? swapChainDesc.BufferCount : 2;
 	options.mvecDepthWidth = renderWidth;
@@ -668,7 +669,7 @@ void Streamline::TagDLSSGResources(ID3D12Resource* a_hudlessColor, ID3D12Resourc
 		return;
 	}
 
-	constexpr auto lifecycle = sl::ResourceLifecycle::eOnlyValidNow;
+	constexpr auto lifecycle = sl::ResourceLifecycle::eValidUntilPresent;
 
 	sl::Extent lowResExtent{ 0, 0, static_cast<uint32_t>(a_renderSize.x), static_cast<uint32_t>(a_renderSize.y) };
 	sl::Extent fullExtent{ 0, 0, static_cast<uint32_t>(a_displaySize.x), static_cast<uint32_t>(a_displaySize.y) };
@@ -690,6 +691,42 @@ void Streamline::TagDLSSGResources(ID3D12Resource* a_hudlessColor, ID3D12Resourc
 	if (SL_FAILED(result, tagResult)) {
 		logger::warn("[Streamline] Could not tag D3D12 DLSS-G resources: {}", magic_enum::enum_name(result));
 	}
+}
+
+void Streamline::ClearDLSSGResourceTags(ID3D12GraphicsCommandList* a_commandList)
+{
+	if (!slSetTagForFrame) {
+		return;
+	}
+
+	static auto gameViewport = Util::State_GetSingleton();
+	if (!EnsureFrameToken(gameViewport->frameCount) || !frameToken) {
+		return;
+	}
+
+	sl::ResourceTag backbufferTag = { nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle{} };
+	sl::ResourceTag hudlessTag = { nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle{} };
+	sl::ResourceTag depthTag = { nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle{} };
+	sl::ResourceTag mvecTag = { nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle{} };
+	sl::ResourceTag uiColorAlphaTag = { nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle{} };
+	sl::ResourceTag uiAlphaTag = { nullptr, sl::kBufferTypeUIAlpha, sl::ResourceLifecycle{} };
+
+	sl::ResourceTag resourceTags[] = {
+		backbufferTag,
+		hudlessTag,
+		depthTag,
+		mvecTag,
+		uiColorAlphaTag,
+		uiAlphaTag
+	};
+	const auto tagResult = slSetTagForFrame(*frameToken, viewport, resourceTags, _countof(resourceTags), a_commandList);
+	if (SL_FAILED(result, tagResult)) {
+		logger::warn("[Streamline] Could not clear D3D12 DLSS-G resource tags: {}", magic_enum::enum_name(result));
+		return;
+	}
+
+	presentFrameToken = frameToken;
+	presentFrameTokenIndex = currentFrameTokenIndex;
 }
 
 void Streamline::SetPresentFrameIndex(uint32_t a_frameIndex)

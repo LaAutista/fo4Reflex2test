@@ -179,6 +179,7 @@ public:
 	 */
 	void TagDLSSGResources(ID3D11Texture2D* a_hudlessColor, ID3D11Texture2D* a_motionVectors, ID3D11Texture2D* a_depth, float2 a_renderSize, float2 a_displaySize);
 	void TagDLSSGResources(ID3D12Resource* a_hudlessColor, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12Resource* a_uiColorAlpha, ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex, float2 a_renderSize, float2 a_displaySize);
+	void ClearDLSSGResourceTags(ID3D12GraphicsCommandList* a_commandList);
 	void SetPresentFrameIndex(uint32_t a_frameIndex);
 
 	/**

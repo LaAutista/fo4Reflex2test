@@ -39,6 +39,8 @@ float originalDynamicWidthRatio = 1.0f;
 
 namespace
 {
+	constexpr uint32_t kDLSSGResumeStableFrames = 2;
+
 	float* GetGlobalDynamicWidthRatio()
 	{
 		static REL::Relocation<float*> ratio{
@@ -1519,6 +1521,10 @@ bool Upscaling::ShouldUseFrameGeneration(bool a_checkMenu)
 		return false;
 	}
 
+	if (a_checkMenu && !dlssgMenuResumeReady) {
+		return false;
+	}
+
 	if ((settings.frameGenerationMode == 0 && settings.dynamicMFGEnabled == 0) || !streamline->featureDLSSG || enbLoaded) {
 		return false;
 	}
@@ -1726,6 +1732,17 @@ void Upscaling::UpdateUpscaling()
 
 	upscaleMethodNoMenu = GetUpscaleMethod(false);
 	upscaleMethod = GetUpscaleMethod(true);
+	const bool menuBlocksUpscaling = upscaleMethodNoMenu != UpscaleMethod::kDisabled && upscaleMethod == UpscaleMethod::kDisabled;
+
+	if (menuBlocksUpscaling) {
+		dlssgMenuResumeReady = false;
+		dlssgStableGameplayFrames = 0;
+	} else if (!dlssgMenuResumeReady && upscaleMethod != UpscaleMethod::kDisabled) {
+		dlssgStableGameplayFrames = std::min<uint32_t>(dlssgStableGameplayFrames + 1, kDLSSGResumeStableFrames);
+		dlssgMenuResumeReady = dlssgStableGameplayFrames >= kDLSSGResumeStableFrames;
+	} else if (upscaleMethod == UpscaleMethod::kDisabled) {
+		dlssgStableGameplayFrames = 0;
+	}
 
 	// Menus that render their own scene, like Pip-Boy, disable upscaling and need native render targets.
 	// Overlay-only menus keep the gameplay scaler because GetUpscaleMethod(true) remains enabled.
@@ -1778,6 +1795,10 @@ void Upscaling::UpdateUpscaling()
 	Streamline::GetSingleton()->UpdateReflex(settings.reflexMode, frameGenerationThisFrame);
 	if (!frameGenerationThisFrame) {
 		Streamline::GetSingleton()->RequestDLSSGDisable();
+		for (auto i = 0; i < 2; ++i) {
+			dlssgInputsReady[i] = false;
+			fsrFrameGenerationInputsReady[i] = false;
+		}
 	}
 
 	CheckResources();
@@ -2512,6 +2533,14 @@ bool Upscaling::EvaluateFSRFrameGeneration(ID3D12GraphicsCommandList* a_commandL
 void Upscaling::TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex)
 {
 	if (a_frameIndex >= dlssgInputsReady.size() || !dlssgInputsReady[a_frameIndex]) {
+		auto streamline = Streamline::GetSingleton();
+		if (streamline->NeedsDLSSGPresentSafety()) {
+			if (streamline->dlssgActive) {
+				streamline->RequestDLSSGDisable();
+				streamline->ApplyPendingDLSSGDisable();
+			}
+			streamline->ClearDLSSGResourceTags(a_commandList);
+		}
 		return;
 	}
 

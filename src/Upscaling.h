@@ -403,6 +403,8 @@ public:
 	std::array<float2, 2> fsrInputJitters{};
 	std::array<float2, 2> fsrInputRenderSizes{};
 	std::array<float2, 2> fsrInputDisplaySizes{};
+	bool dlssgMenuResumeReady = true;
+	uint32_t dlssgStableGameplayFrames = 0;
 
 	/**
 	 * @struct UpscalingCB
