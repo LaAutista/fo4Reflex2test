@@ -407,6 +407,7 @@ public:
 	std::array<float2, 2> fsrInputJitters{};
 	std::array<float2, 2> fsrInputRenderSizes{};
 	std::array<float2, 2> fsrInputDisplaySizes{};
+	bool d3d12DLSSMenuSuspended = false;
 	bool dlssgMenuResumeReady = true;
 	uint32_t dlssgStableGameplayFrames = 0;
 

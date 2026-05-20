@@ -835,7 +835,9 @@ void Upscaling::UpdateRenderTargets(float a_currentWidthRatio, float a_currentHe
 	for (int i = 0; i < ARRAYSIZE(renderTargetsPatch); i++)
 		UpdateRenderTarget(renderTargetsPatch[i], a_currentWidthRatio, a_currentHeightRatio);
 
-	// Reset intermediate textures to force recreation with new dimensions
+	// Reset render-size dependent local textures. Shared D3D11/D3D12 bridge
+	// textures are descriptor-checked at capture time and can be reused when
+	// menu transitions return to the same dimensions.
 	upscalingTexture = nullptr;
 	dlssOutputTexture = nullptr;
 	dilatedMotionVectorTexture = nullptr;
@@ -843,32 +845,6 @@ void Upscaling::UpdateRenderTargets(float a_currentWidthRatio, float a_currentHe
 	dlssgHUDLessTexture = nullptr;
 	dlssTransparencyMaskReady = false;
 	for (auto i = 0; i < 2; ++i) {
-		dlssInputSharedTextures[i] = nullptr;
-		dlssSharpenedSharedTextures[i] = nullptr;
-		dlssgHUDLessSharedTextures[i] = nullptr;
-		dlssgMotionVectorSharedTextures[i] = nullptr;
-		dlssgDepthSharedTextures[i] = nullptr;
-		dlssgUIColorAlphaSharedTextures[i] = nullptr;
-		dlssTransparencyMaskSharedTextures[i] = nullptr;
-		fsrInputSharedTextures[i] = nullptr;
-		fsrOutputSharedTextures[i] = nullptr;
-		fsrMotionVectorSharedTextures[i] = nullptr;
-		fsrDepthSharedTextures[i] = nullptr;
-		fsrOpaqueOnlySharedTextures[i] = nullptr;
-		fsrReactiveMaskSharedTextures[i] = nullptr;
-		dlssInputD3D12[i] = nullptr;
-		dlssSharpenedD3D12[i] = nullptr;
-		dlssgHUDLessD3D12[i] = nullptr;
-		dlssgMotionVectorD3D12[i] = nullptr;
-		dlssgDepthD3D12[i] = nullptr;
-		dlssgUIColorAlphaD3D12[i] = nullptr;
-		dlssTransparencyMaskD3D12[i] = nullptr;
-		fsrInputD3D12[i] = nullptr;
-		fsrOutputD3D12[i] = nullptr;
-		fsrMotionVectorD3D12[i] = nullptr;
-		fsrDepthD3D12[i] = nullptr;
-		fsrOpaqueOnlyD3D12[i] = nullptr;
-		fsrReactiveMaskD3D12[i] = nullptr;
 		dlssgInputsReady[i] = false;
 		fsrFrameGenerationInputsReady[i] = false;
 		fsrD3D12InputsReady[i] = false;
@@ -1789,6 +1765,13 @@ void Upscaling::UpdateUpscaling()
 	upscaleMethodNoMenu = GetUpscaleMethod(false);
 	upscaleMethod = GetUpscaleMethod(true);
 	const bool menuBlocksUpscaling = upscaleMethodNoMenu != UpscaleMethod::kDisabled && upscaleMethod == UpscaleMethod::kDisabled;
+	auto streamline = Streamline::GetSingleton();
+	const bool menuSuspendsD3D12DLSS =
+		menuBlocksUpscaling &&
+		upscaleMethodNoMenu == UpscaleMethod::kDLSS &&
+		streamline->UsesD3D12() &&
+		streamline->featureDLSS;
+	const bool resumeD3D12DLSSFromMenu = d3d12DLSSMenuSuspended && !menuBlocksUpscaling;
 
 	if (menuBlocksUpscaling) {
 		dlssgMenuResumeReady = false;
@@ -1798,6 +1781,21 @@ void Upscaling::UpdateUpscaling()
 		dlssgMenuResumeReady = dlssgStableGameplayFrames >= kDLSSGResumeStableFrames;
 	} else if (upscaleMethod == UpscaleMethod::kDisabled) {
 		dlssgStableGameplayFrames = 0;
+	}
+
+	if (menuSuspendsD3D12DLSS && !d3d12DLSSMenuSuspended) {
+		streamline->DisableDLSS();
+		for (auto i = 0; i < 2; ++i) {
+			dlssD3D12InputsReady[i] = false;
+			dlssD3D12Sharpened[i] = false;
+			dlssD3D12TransparencyMaskReady[i] = false;
+			dlssgInputFrameTokenIndices[i] = std::numeric_limits<uint32_t>::max();
+			dlssgInputRenderSizes[i] = { 0.0f, 0.0f };
+			dlssgInputDisplaySizes[i] = { 0.0f, 0.0f };
+		}
+		d3d12DLSSMenuSuspended = true;
+	} else if (resumeD3D12DLSSFromMenu) {
+		d3d12DLSSMenuSuspended = false;
 	}
 
 	// Menus that render their own scene, like Pip-Boy, disable upscaling and need native render targets.
@@ -1848,9 +1846,9 @@ void Upscaling::UpdateUpscaling()
 	SetDynamicResolutionRatio(renderTargetManager, originalDynamicWidthRatio, originalDynamicHeightRatio);
 
 	const bool frameGenerationThisFrame = ShouldUseFrameGeneration(true);
-	Streamline::GetSingleton()->UpdateReflex(settings.reflexMode, frameGenerationThisFrame);
+	streamline->UpdateReflex(settings.reflexMode, frameGenerationThisFrame);
 	if (!frameGenerationThisFrame) {
-		Streamline::GetSingleton()->RequestDLSSGDisable();
+		streamline->RequestDLSSGDisable();
 		for (auto i = 0; i < 2; ++i) {
 			dlssgInputsReady[i] = false;
 			fsrFrameGenerationInputsReady[i] = false;
@@ -2671,7 +2669,7 @@ void Upscaling::TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_
 	if (a_frameIndex >= dlssgInputsReady.size() || !dlssgInputsReady[a_frameIndex]) {
 		auto streamline = Streamline::GetSingleton();
 		if (streamline->NeedsDLSSGPresentSafety()) {
-			if (streamline->dlssgActive) {
+			if (!ShouldUseFrameGeneration(true) && streamline->dlssgActive) {
 				streamline->RequestDLSSGDisable();
 				streamline->ApplyPendingDLSSGDisable();
 			}

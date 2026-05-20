@@ -704,7 +704,14 @@ void Streamline::ClearDLSSGResourceTags(ID3D12GraphicsCommandList* a_commandList
 		return;
 	}
 
-	sl::ResourceTag backbufferTag = { nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle{} };
+	const sl::Extent fullExtent{
+		0,
+		0,
+		static_cast<uint32_t>(gameViewport->screenWidth),
+		static_cast<uint32_t>(gameViewport->screenHeight)
+	};
+
+	sl::ResourceTag backbufferTag = { nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle{}, &fullExtent };
 	sl::ResourceTag hudlessTag = { nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle{} };
 	sl::ResourceTag depthTag = { nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle{} };
 	sl::ResourceTag mvecTag = { nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle{} };
@@ -1111,10 +1118,28 @@ void Streamline::UpdateConstants(float2 a_jitter)
 	}
 }
 
-void Streamline::DestroyDLSSResources()
+void Streamline::DisableDLSS()
 {
+	if (!initialized || !featureDLSS || !slDLSSSetOptions) {
+		return;
+	}
+
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
-	slDLSSSetOptions(viewport, dlssOptions);
-	slFreeResources(sl::kFeatureDLSS, viewport);
+	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
+		logger::warn("[Streamline] Could not disable DLSS: {}", magic_enum::enum_name(result));
+	}
+}
+
+void Streamline::DestroyDLSSResources()
+{
+	DisableDLSS();
+
+	if (!initialized || !featureDLSS || !slFreeResources) {
+		return;
+	}
+
+	if (SL_FAILED(result, slFreeResources(sl::kFeatureDLSS, viewport))) {
+		logger::warn("[Streamline] Could not free DLSS resources: {}", magic_enum::enum_name(result));
+	}
 }

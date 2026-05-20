@@ -195,6 +195,7 @@ public:
 	 * Disables DLSS mode and frees Streamline resources for the current viewport.
 	 * Called when switching to a different upscaling method.
 	 */
+	void DisableDLSS();
 	void DestroyDLSSResources();
 
 	// ========================================
