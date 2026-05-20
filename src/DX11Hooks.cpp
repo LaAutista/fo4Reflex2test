@@ -13,19 +13,6 @@ namespace
 {
 	using CreateSwapChain_t = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 
-	bool WantsD3D12FrameGeneration()
-	{
-		const auto mode = GetPrivateProfileIntA("Settings", "iFrameGenerationMode", 0, "Data\\MCM\\Settings\\Upscaling.ini");
-		return mode > 0;
-	}
-
-	bool WantsD3D12Upscaling()
-	{
-		const auto method = GetPrivateProfileIntA("Settings", "iUpscaleMethodPreference", 2, "Data\\MCM\\Settings\\Upscaling.ini");
-		return method == static_cast<int>(Upscaling::UpscaleMethod::kFSR) ||
-			method == static_cast<int>(Upscaling::UpscaleMethod::kDLSS);
-	}
-
 	winrt::com_ptr<IDXGIAdapter> ResolveAdapter(IDXGIAdapter* a_adapter, ID3D11Device* a_device)
 	{
 		winrt::com_ptr<IDXGIAdapter> result;
@@ -92,9 +79,7 @@ struct hkIDXGIFactoryCreateSwapChain
 
 		try {
 			auto streamline = Streamline::GetSingleton();
-			const bool wantsD3D12FrameGeneration = WantsD3D12FrameGeneration();
-			const bool wantsD3D12Upscaling = WantsD3D12Upscaling();
-			logger::info("[DX12SwapChain] ENB factory swapchain hook requested frameGeneration={} upscaling={}", wantsD3D12FrameGeneration, wantsD3D12Upscaling);
+			logger::info("[DX12SwapChain] ENB factory swapchain hook requested");
 
 			winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
 			d3d11Device->GetImmediateContext(d3d11Context.put());
@@ -104,7 +89,7 @@ struct hkIDXGIFactoryCreateSwapChain
 				throw DX::com_exception(E_FAIL);
 			}
 
-			Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), wantsD3D12FrameGeneration);
+			Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), true);
 
 			winrt::com_ptr<IDXGIFactory5> dxgiFactory;
 			DX::ThrowIfFailed(This->QueryInterface(IID_PPV_ARGS(dxgiFactory.put())));
@@ -182,8 +167,6 @@ struct hkD3D11CreateDeviceAndSwapChain
 		FeatureLevels = 1;
 
 		auto streamline = Streamline::GetSingleton();
-		const bool wantsD3D12FrameGeneration = WantsD3D12FrameGeneration();
-		const bool wantsD3D12Upscaling = WantsD3D12Upscaling();
 		const bool useD3D12Proxy = pSwapChainDesc && pSwapChainDesc->Windowed && !enbLoaded;
 		if (enbLoaded && pSwapChainDesc && pSwapChainDesc->Windowed && pAdapter) {
 			static bool factoryHooked = false;
@@ -202,7 +185,7 @@ struct hkD3D11CreateDeviceAndSwapChain
 
 		if (useD3D12Proxy) {
 			try {
-				logger::info("[DX12SwapChain] D3D12 proxy swapchain requested at startup frameGeneration={} upscaling={}", wantsD3D12FrameGeneration, wantsD3D12Upscaling);
+				logger::info("[DX12SwapChain] D3D12 proxy swapchain requested at startup");
 				winrt::com_ptr<ID3D11Device> d3d11Device;
 				winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
 				D3D_FEATURE_LEVEL createdFeatureLevel{};
@@ -223,7 +206,7 @@ struct hkD3D11CreateDeviceAndSwapChain
 					throw DX::com_exception(E_FAIL);
 				}
 
-				Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), wantsD3D12FrameGeneration);
+				Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), true);
 
 				winrt::com_ptr<IDXGIFactory5> dxgiFactory;
 				DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
