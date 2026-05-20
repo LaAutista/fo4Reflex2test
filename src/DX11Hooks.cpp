@@ -1,80 +1,100 @@
 #include "DX11Hooks.h"
 
 #include <d3d11.h>
-#pragma comment(lib, "d3d11.lib")
+#include <magic_enum/magic_enum.hpp>
 
-#include "Upscaling.h"
 #include "DX12SwapChain.h"
-#include "FidelityFX.h"
+#include "Streamline.h"
+#include "Upscaling.h"
 
-#include "ENB/ENBSeriesAPI.h"
+extern bool enbLoaded;
 
-bool enbLoaded = false;
-
-decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChain;
-decltype(&IDXGIFactory::CreateSwapChain) ptrCreateSwapChain;
-
-HRESULT WINAPI hk_IDXGIFactory_CreateSwapChain(IDXGIFactory2* This, _In_ ID3D11Device* a_device, _In_ DXGI_SWAP_CHAIN_DESC* pDesc, _COM_Outptr_ IDXGISwapChain** ppSwapChain)
+namespace
 {
-	IDXGIDevice* dxgiDevice = nullptr;
-	DX::ThrowIfFailed(a_device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice));
+	bool WantsD3D12FrameGeneration()
+	{
+		const auto mode = GetPrivateProfileIntA("Settings", "iFrameGenerationMode", 0, "Data\\MCM\\Settings\\Upscaling.ini");
+		return mode > 0;
+	}
 
-	IDXGIAdapter* adapter = nullptr;
-	DX::ThrowIfFailed(dxgiDevice->GetAdapter(&adapter));
+	bool WantsD3D12Upscaling()
+	{
+		const auto method = GetPrivateProfileIntA("Settings", "iUpscaleMethodPreference", 2, "Data\\MCM\\Settings\\Upscaling.ini");
+		return method == static_cast<int>(Upscaling::UpscaleMethod::kFSR) ||
+			method == static_cast<int>(Upscaling::UpscaleMethod::kDLSS);
+	}
 
-	auto proxy = DX12SwapChain::GetSingleton();
+	winrt::com_ptr<IDXGIAdapter> ResolveAdapter(IDXGIAdapter* a_adapter, ID3D11Device* a_device)
+	{
+		winrt::com_ptr<IDXGIAdapter> result;
+		if (a_adapter) {
+			result.copy_from(a_adapter);
+			return result;
+		}
 
-	proxy->SetD3D11Device(a_device);
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (SUCCEEDED(a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())))) {
+			IDXGIAdapter* adapter = nullptr;
+			if (SUCCEEDED(dxgiDevice->GetAdapter(&adapter))) {
+				result.attach(adapter);
+			}
+		}
 
-	ID3D11DeviceContext* context;
-	a_device->GetImmediateContext(&context);
-	proxy->SetD3D11DeviceContext(context);
-
-	proxy->CreateD3D12Device(adapter);
-	proxy->CreateSwapChain((IDXGIFactory5*)This, *pDesc);
-	proxy->CreateInterop();
-
-	*ppSwapChain = proxy->GetSwapChainProxy();
-
-	return S_OK;
+		return result;
+	}
 }
 
-HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
-	IDXGIAdapter* pAdapter,
-	D3D_DRIVER_TYPE DriverType,
-	HMODULE Software,
-	UINT Flags,
-	const D3D_FEATURE_LEVEL* pFeatureLevels,
-	UINT FeatureLevels,
-	UINT SDKVersion,
-	DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
-	IDXGISwapChain** ppSwapChain,
-	ID3D11Device** ppDevice,
-	D3D_FEATURE_LEVEL* pFeatureLevel,
-	ID3D11DeviceContext** ppImmediateContext)
+struct hkIDXGISwapChainPresent
 {
-	auto upscaling = Upscaling::GetSingleton();
+	static HRESULT STDMETHODCALLTYPE thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
+	{
+		auto streamline = Streamline::GetSingleton();
+		streamline->OnPresentStart();
+		const auto result = func(This, SyncInterval, Flags);
+		streamline->OnPresentEnd(result);
+		return result;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-	if (pSwapChainDesc->Windowed) {
-		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
-		
-		auto fidelityFX = FidelityFX::GetSingleton();
+struct hkD3D11CreateDeviceAndSwapChain
+{
+	static HRESULT WINAPI thunk(
+		IDXGIAdapter* pAdapter,
+		D3D_DRIVER_TYPE DriverType,
+		HMODULE Software,
+		UINT Flags,
+		const D3D_FEATURE_LEVEL* pFeatureLevels,
+		UINT FeatureLevels,
+		UINT SDKVersion,
+		const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+		IDXGISwapChain** ppSwapChain,
+		ID3D11Device** ppDevice,
+		D3D_FEATURE_LEVEL* pFeatureLevel,
+		ID3D11DeviceContext** ppImmediateContext)
+	{
+		const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
+		pFeatureLevels = &featureLevel;
+		FeatureLevels = 1;
 
-		if (fidelityFX->module) {
-			upscaling->d3d12Interop = true;
-			upscaling->refreshRate = Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow);
+		auto streamline = Streamline::GetSingleton();
+		const bool wantsD3D12FrameGeneration = streamline->interposer && WantsD3D12FrameGeneration();
+		const bool wantsD3D12Upscaling = WantsD3D12Upscaling();
+		const bool useD3D12Proxy = !enbLoaded && pSwapChainDesc && pSwapChainDesc->Windowed;
+		if (useD3D12Proxy) {
+			try {
+				logger::info("[DX12SwapChain] D3D12 proxy swapchain requested at startup frameGeneration={} upscaling={}", wantsD3D12FrameGeneration, wantsD3D12Upscaling);
+				Streamline* streamlineForProxy = nullptr;
+				if (streamline->interposer) {
+					streamline->Initialize(sl::RenderAPI::eD3D12);
+					if (streamline->UsesD3D12() && !(Upscaling::kForceFSRFrameGenerationForTesting && wantsD3D12FrameGeneration)) {
+						streamlineForProxy = streamline;
+					}
+				}
 
-			IDXGIFactory4* dxgiFactory;
-			pAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory));
-
-			const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
-			pFeatureLevels = &featureLevel;
-			FeatureLevels = 1;
-
-			if (enbLoaded) {
-				*(uintptr_t*)&ptrCreateSwapChain = Detours::X64::DetourClassVTable(*(uintptr_t*)dxgiFactory, &hk_IDXGIFactory_CreateSwapChain, 10);
-			}
-			else {
+				winrt::com_ptr<ID3D11Device> d3d11Device;
+				winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
+				D3D_FEATURE_LEVEL createdFeatureLevel{};
 				DX::ThrowIfFailed(D3D11CreateDevice(
 					pAdapter,
 					DriverType,
@@ -83,68 +103,121 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 					pFeatureLevels,
 					FeatureLevels,
 					SDKVersion,
-					ppDevice,
-					pFeatureLevel,
-					ppImmediateContext));
+					d3d11Device.put(),
+					&createdFeatureLevel,
+					d3d11Context.put()));
 
-				IDXGIDevice* dxgiDevice = nullptr;
-				DX::ThrowIfFailed((*ppDevice)->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice));
+				auto adapter = ResolveAdapter(pAdapter, d3d11Device.get());
+				if (!adapter) {
+					throw DX::com_exception(E_FAIL);
+				}
 
-				IDXGIAdapter* adapter = nullptr;
-				DX::ThrowIfFailed(dxgiDevice->GetAdapter(&adapter));
+				winrt::com_ptr<IDXGIFactory5> dxgiFactory;
+				DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
-				auto proxy = DX12SwapChain::GetSingleton();
+				auto dx12SwapChain = DX12SwapChain::GetSingleton();
+				dx12SwapChain->SetD3D11Device(d3d11Device.get());
+				dx12SwapChain->SetD3D11DeviceContext(d3d11Context.get());
+				dx12SwapChain->CreateD3D12Device(adapter.get(), streamlineForProxy);
+				if (!streamlineForProxy && streamline->UsesD3D12() && streamline->slSetD3DDevice) {
+					if (SL_FAILED(result, streamline->slSetD3DDevice(dx12SwapChain->GetD3D12Device()))) {
+						logger::warn("[DX12SwapChain] slSetD3DDevice(D3D12 native) failed: {}", magic_enum::enum_name(result));
+					}
+				}
 
-				proxy->SetD3D11Device(*ppDevice);
+				if (streamline->UsesD3D12()) {
+					streamline->CheckFeatures(adapter.get());
+					streamline->PostDevice();
+				}
 
-				ID3D11DeviceContext* context;
-				(*ppDevice)->GetImmediateContext(&context);
-				proxy->SetD3D11DeviceContext(context);
+				const bool useFidelityFXFrameGeneration = (Upscaling::kForceFSRFrameGenerationForTesting || !streamline->featureDLSSG);
+				if (useFidelityFXFrameGeneration) {
+					logger::info("[DX12SwapChain] FidelityFX frame generation selected force={} dlssgAvailable={}", Upscaling::kForceFSRFrameGenerationForTesting, streamline->featureDLSSG);
+				}
+				dx12SwapChain->CreateSwapChain(dxgiFactory.get(), *pSwapChainDesc, streamlineForProxy, useFidelityFXFrameGeneration);
+				dx12SwapChain->CreateInterop();
 
-				proxy->CreateD3D12Device(adapter);
-				proxy->CreateSwapChain((IDXGIFactory5*)dxgiFactory, *pSwapChainDesc);
-				proxy->CreateInterop();
+				*ppSwapChain = dx12SwapChain->GetSwapChainProxy();
+				*ppDevice = d3d11Device.detach();
+				*ppImmediateContext = d3d11Context.detach();
+				if (pFeatureLevel) {
+					*pFeatureLevel = createdFeatureLevel;
+				}
 
-				*ppSwapChain = proxy->GetSwapChainProxy();
-				
+				if (streamlineForProxy) {
+					streamline->SetSwapChain(*ppSwapChain);
+				}
 				return S_OK;
+			} catch (const std::exception& e) {
+				logger::error("[DX12SwapChain] Failed to create D3D12 proxy swapchain: {}", e.what());
+				logger::warn("[DX12SwapChain] Falling back to the native D3D11 swapchain; D3D12-only upscalers will remain unavailable until restart");
+				if (streamline->UsesD3D12()) {
+					streamline->Shutdown();
+				}
+			}
+		}
+
+		if (streamline->interposer && !streamline->initialized) {
+			streamline->Initialize(sl::RenderAPI::eD3D11);
+		}
+
+		DX::ThrowIfFailed(func(pAdapter,
+			DriverType,
+			Software,
+			Flags,
+			pFeatureLevels,
+			FeatureLevels,
+			SDKVersion,
+			pSwapChainDesc,
+			ppSwapChain,
+			ppDevice,
+			pFeatureLevel,
+			ppImmediateContext));
+			
+		if (streamline->interposer){
+			if (!enbLoaded)
+				streamline->slUpgradeInterface((void**)&(*ppSwapChain));
+			streamline->slSetD3DDevice(*ppDevice);
+
+			streamline->SetSwapChain(*ppSwapChain);
+
+			static bool presentHooked = false;
+			if (!presentHooked && *ppSwapChain) {
+				stl::detour_vfunc<8, hkIDXGISwapChainPresent>(*ppSwapChain);
+				presentHooked = true;
 			}
 
-		} else {
-			logger::warn("[Frame Generation] amd_fidelityfx_dx12.dll is not loaded, skipping proxy");
+			IDXGIAdapter* featureAdapter = pAdapter;
+			winrt::com_ptr<IDXGIAdapter> queriedAdapter;
+			if (!featureAdapter && *ppDevice) {
+				winrt::com_ptr<IDXGIDevice> dxgiDevice;
+				if (SUCCEEDED((*ppDevice)->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())))) {
+					IDXGIAdapter* adapter = nullptr;
+					if (SUCCEEDED(dxgiDevice->GetAdapter(&adapter))) {
+						queriedAdapter.attach(adapter);
+						featureAdapter = queriedAdapter.get();
+					}
+				}
+			}
+
+			streamline->CheckFeatures(featureAdapter);
+			streamline->PostDevice();
 		}
+
+		return S_OK;
 	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
 
-	auto ret = ptrD3D11CreateDeviceAndSwapChain(
-		pAdapter,
-		DriverType,
-		Software,
-		Flags,
-		pFeatureLevels,
-		FeatureLevels,
-		SDKVersion,
-		pSwapChainDesc,
-		ppSwapChain,
-		ppDevice,
-		pFeatureLevel,
-		ppImmediateContext);
-
-	return ret;
-}
-
-void DX11Hooks::Install()
+namespace DX11Hooks
 {
-	if (ENB_API::RequestENBAPI()) {
-		logger::info("ENB detected, using alternative swap chain hook");
-		enbLoaded = true;
-	} else {
-		logger::info("ENB not detected, using standard swap chain hook");
+	void Install()
+	{
+		auto streamline = Streamline::GetSingleton();
+		streamline->LoadInterposer();
+
+		uintptr_t moduleBase = (uintptr_t)GetModuleHandle(nullptr);
+		// Hook BSGraphics::CreateD3DAndSwapChain::D3D11CreateDeviceAndSwapChain to use D3D_FEATURE_LEVEL_11_1
+		(uintptr_t&)hkD3D11CreateDeviceAndSwapChain::func = Detours::IATHook(moduleBase, "d3d11.dll", "D3D11CreateDeviceAndSwapChain", (uintptr_t)hkD3D11CreateDeviceAndSwapChain::thunk);
 	}
-
-	auto fidelityFX = FidelityFX::GetSingleton();
-	fidelityFX->LoadFFX();
-
-	uintptr_t moduleBase = (uintptr_t)GetModuleHandle(nullptr);
-
-	(uintptr_t&)ptrD3D11CreateDeviceAndSwapChain = Detours::IATHook(moduleBase, "d3d11.dll", "D3D11CreateDeviceAndSwapChain", (uintptr_t)hk_D3D11CreateDeviceAndSwapChain);
 }
