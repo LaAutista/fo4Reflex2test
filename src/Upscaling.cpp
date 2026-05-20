@@ -44,10 +44,9 @@ namespace
 	float* GetGlobalDynamicWidthRatio()
 	{
 		static REL::Relocation<float*> ratio{
-			REL::VariantID{
-				REL::Offset(0x3850CB8),
-				REL::Offset(0x2EB3D18),
-				REL::Offset(0x2EB3D18)
+			REL::ID {
+				1361955,
+				2666748
 			}
 		};
 		return ratio.get();
@@ -56,10 +55,9 @@ namespace
 	float* GetGlobalDynamicHeightRatio()
 	{
 		static REL::Relocation<float*> ratio{
-			REL::VariantID{
-				REL::Offset(0x3850CBC),
-				REL::Offset(0x2EB3D1C),
-				REL::Offset(0x2EB3D1C)
+			REL::ID {
+				681244,
+				2666749
 			}
 		};
 		return ratio.get();
