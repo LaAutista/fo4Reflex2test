@@ -269,6 +269,9 @@ public:
 	 * @brief Copy and upscale depth buffers
 	 */
 	void CopyDepth();
+	void PreFrameGenerationAlpha();
+	bool PostFrameGenerationAlpha();
+	void CopyFrameGenerationBuffers();
 
 	ID3D11ShaderResourceView* originalDepthView;	    ///< Original depth buffer SRV
 	std::unique_ptr<Texture2D> depthOverrideTexture;    ///< Dynamic resolution depth override texture
@@ -307,6 +310,8 @@ public:
 	 * Copies depth buffer
 	 */
 	ID3D11ComputeShader* GetOverrideDepthCS();
+	ID3D11ComputeShader* GetCopyDepthToFrameGenerationCS();
+	ID3D11ComputeShader* GetGenerateFrameGenerationBuffersCS();
 
 	/**
 	 * @brief Get or compile custom SSR raytracing pixel shader
@@ -419,5 +424,16 @@ private:
 	winrt::com_ptr<ID3D11ComputeShader> dilateMotionVectorCS;        ///< Motion vector dilation shader
 	winrt::com_ptr<ID3D11ComputeShader> overrideLinearDepthCS;       ///< Linear depth upscaling shader
 	winrt::com_ptr<ID3D11ComputeShader> overrideDepthCS;             ///< Depth copy shader
+	winrt::com_ptr<ID3D11ComputeShader> copyDepthToFrameGenerationCS;  ///< Depth copy shader for frame generation inputs
+	winrt::com_ptr<ID3D11ComputeShader> generateFrameGenerationBuffersCS;  ///< Motion/depth reticle fix shader for frame generation inputs
 	winrt::com_ptr<ID3D11PixelShader> BSImagespaceShaderSSLRRaytracing;  ///< Custom SSR shader
+
+	std::unique_ptr<Texture2D> frameGenerationPreAlphaTexture;
+	std::unique_ptr<Texture2D> frameGenerationMotionVectorTexture;
+	std::unique_ptr<Texture2D> frameGenerationDepthTexture;
+	bool frameGenerationBuffersReady = false;
+	uint32_t frameGenerationBuffersFrame = 0;
+
+	bool WantsFrameGenerationInputs();
+	bool EnsureFrameGenerationPatchResources(float2 a_renderSize, DXGI_FORMAT a_colorResourceFormat, DXGI_FORMAT a_colorSRVFormat, DXGI_FORMAT a_motionVectorFormat);
 };

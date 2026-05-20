@@ -360,6 +360,37 @@ struct DrawWorld_Render_PreUI_Forward
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+bool frameGenerationReticleFix = false;
+
+/** @brief Hook forward rendering to capture frame-generation motion/depth inputs */
+struct DrawWorld_FrameGenerationForward
+{
+	static void thunk(void* This)
+	{
+		func(This);
+
+		if (!frameGenerationReticleFix) {
+			Upscaling::GetSingleton()->CopyFrameGenerationBuffers();
+		}
+
+		frameGenerationReticleFix = false;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+/** @brief Hook reticle rendering to mask reticles out of frame-generation motion/depth inputs */
+struct DrawWorld_FrameGenerationReticle
+{
+	static void thunk(void* This)
+	{
+		auto upscaling = Upscaling::GetSingleton();
+		upscaling->PreFrameGenerationAlpha();
+		func(This);
+		frameGenerationReticleFix = upscaling->PostFrameGenerationAlpha();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 /** @brief Hook for HBAO to fix dynamic resolution */
 struct DrawWorld_Render_PreUI_NVHBAO
 {
@@ -518,6 +549,11 @@ void Upscaling::InstallHooks()
 	// Copy opaque texture for FSR reactive mask
 	stl::write_thunk_call<ForwardAlphaImpl_FinishAccumulating_Standard_PostResolveDepth>(
 		REL::ID{ 338205, 2318315 }.address() + (isOG ? 0x1DC : 0x4C6));
+
+	// Capture reticle-safe motion vectors and depth for frame generation.
+	stl::detour_thunk<DrawWorld_FrameGenerationForward>(REL::ID{ 656535, 2318315 });
+	stl::write_thunk_call<DrawWorld_FrameGenerationReticle>(
+		REL::ID{ 338205, 2318315 }.address() + (isOG ? 0x253 : 0x53D));
 
 	// These hooks are not needed when using ENB because dynamic resolution is not supported
 	if (!enbLoaded) {
@@ -1172,6 +1208,278 @@ void Upscaling::CopyDepth()
 	}
 }
 
+bool Upscaling::WantsFrameGenerationInputs()
+{
+	const auto useD3D12DLSS =
+		Streamline::GetSingleton()->UsesD3D12() &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		Streamline::GetSingleton()->featureDLSS;
+
+	return DX12SwapChain::GetSingleton()->IsReady() &&
+		(ShouldUseFrameGeneration(true) || ShouldUseFSRFrameGeneration(true) || useD3D12DLSS);
+}
+
+bool Upscaling::EnsureFrameGenerationPatchResources(float2 a_renderSize, DXGI_FORMAT a_colorResourceFormat, DXGI_FORMAT a_colorSRVFormat, DXGI_FORMAT a_motionVectorFormat)
+{
+	const auto width = static_cast<UINT>(a_renderSize.x);
+	const auto height = static_cast<UINT>(a_renderSize.y);
+	if (width == 0 || height == 0 || a_colorResourceFormat == DXGI_FORMAT_UNKNOWN || a_colorSRVFormat == DXGI_FORMAT_UNKNOWN || a_motionVectorFormat == DXGI_FORMAT_UNKNOWN) {
+		return false;
+	}
+
+	auto matches = [width, height](const std::unique_ptr<Texture2D>& a_texture, DXGI_FORMAT a_format) {
+		if (!a_texture || !a_texture->resource) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC desc{};
+		a_texture->resource->GetDesc(&desc);
+		return desc.Width == width && desc.Height == height && desc.Format == a_format;
+	};
+
+	if (!matches(frameGenerationPreAlphaTexture, a_colorResourceFormat)) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = width;
+		desc.Height = height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = a_colorResourceFormat;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = a_colorSRVFormat;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		frameGenerationPreAlphaTexture = std::make_unique<Texture2D>(desc);
+		frameGenerationPreAlphaTexture->CreateSRV(srvDesc);
+	}
+
+	if (!matches(frameGenerationMotionVectorTexture, a_motionVectorFormat)) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = width;
+		desc.Height = height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = a_motionVectorFormat;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = desc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = desc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+
+		frameGenerationMotionVectorTexture = std::make_unique<Texture2D>(desc);
+		frameGenerationMotionVectorTexture->CreateSRV(srvDesc);
+		frameGenerationMotionVectorTexture->CreateUAV(uavDesc);
+	}
+
+	if (!matches(frameGenerationDepthTexture, DXGI_FORMAT_R32_FLOAT)) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = width;
+		desc.Height = height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R32_FLOAT;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = desc.Format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = desc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+
+		frameGenerationDepthTexture = std::make_unique<Texture2D>(desc);
+		frameGenerationDepthTexture->CreateSRV(srvDesc);
+		frameGenerationDepthTexture->CreateUAV(uavDesc);
+	}
+
+	return frameGenerationPreAlphaTexture &&
+		frameGenerationMotionVectorTexture &&
+		frameGenerationDepthTexture &&
+		frameGenerationPreAlphaTexture->srv &&
+		frameGenerationMotionVectorTexture->srv &&
+		frameGenerationMotionVectorTexture->uav &&
+		frameGenerationDepthTexture->srv &&
+		frameGenerationDepthTexture->uav;
+}
+
+void Upscaling::PreFrameGenerationAlpha()
+{
+	frameGenerationBuffersReady = false;
+	if (!WantsFrameGenerationInputs()) {
+		return;
+	}
+
+	static auto rendererData = RE::BSGraphics::GetRendererData();
+	auto context = reinterpret_cast<ID3D11DeviceContext*>(rendererData->context);
+	auto& colorPostAlpha = rendererData->renderTargets[(uint)Util::RenderTarget::kMainTemp];
+	auto& motionVector = rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors];
+	if (!colorPostAlpha.texture || !colorPostAlpha.srView || !motionVector.texture) {
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC colorDesc{};
+	reinterpret_cast<ID3D11Texture2D*>(colorPostAlpha.texture)->GetDesc(&colorDesc);
+	D3D11_SHADER_RESOURCE_VIEW_DESC colorSRVDesc{};
+	reinterpret_cast<ID3D11ShaderResourceView*>(colorPostAlpha.srView)->GetDesc(&colorSRVDesc);
+	D3D11_TEXTURE2D_DESC motionVectorDesc{};
+	reinterpret_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&motionVectorDesc);
+
+	const auto renderSize = float2(
+		static_cast<float>(std::min(colorDesc.Width, motionVectorDesc.Width)),
+		static_cast<float>(std::min(colorDesc.Height, motionVectorDesc.Height)));
+	if (!EnsureFrameGenerationPatchResources(renderSize, colorDesc.Format, colorSRVDesc.Format, motionVectorDesc.Format)) {
+		return;
+	}
+
+	const D3D11_BOX sourceBox{ 0, 0, 0, static_cast<UINT>(renderSize.x), static_cast<UINT>(renderSize.y), 1 };
+	context->CopySubresourceRegion(
+		frameGenerationPreAlphaTexture->resource.get(),
+		0,
+		0,
+		0,
+		0,
+		reinterpret_cast<ID3D11Texture2D*>(colorPostAlpha.texture),
+		0,
+		&sourceBox);
+}
+
+bool Upscaling::PostFrameGenerationAlpha()
+{
+	if (!WantsFrameGenerationInputs() || !frameGenerationPreAlphaTexture) {
+		return false;
+	}
+
+	static auto rendererData = RE::BSGraphics::GetRendererData();
+	auto context = reinterpret_cast<ID3D11DeviceContext*>(rendererData->context);
+	auto& colorPostAlpha = rendererData->renderTargets[(uint)Util::RenderTarget::kMainTemp];
+	auto& motionVector = rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors];
+	auto& depth = rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain];
+
+	if (!colorPostAlpha.srView || !motionVector.srView || !depth.srViewDepth ||
+		!frameGenerationMotionVectorTexture || !frameGenerationDepthTexture) {
+		return false;
+	}
+
+	auto shader = GetGenerateFrameGenerationBuffersCS();
+	if (!shader) {
+		return false;
+	}
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	ID3D11ShaderResourceView* views[] = {
+		frameGenerationPreAlphaTexture->srv.get(),
+		reinterpret_cast<ID3D11ShaderResourceView*>(colorPostAlpha.srView),
+		reinterpret_cast<ID3D11ShaderResourceView*>(motionVector.srView),
+		reinterpret_cast<ID3D11ShaderResourceView*>(depth.srViewDepth)
+	};
+	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+
+	ID3D11UnorderedAccessView* uavs[] = {
+		frameGenerationMotionVectorTexture->uav.get(),
+		frameGenerationDepthTexture->uav.get()
+	};
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	context->CSSetShader(shader, nullptr, 0);
+
+	D3D11_TEXTURE2D_DESC desc{};
+	frameGenerationMotionVectorTexture->resource->GetDesc(&desc);
+	context->Dispatch(static_cast<UINT>(std::ceil(desc.Width / 8.0f)), static_cast<UINT>(std::ceil(desc.Height / 8.0f)), 1);
+
+	ID3D11ShaderResourceView* nullViews[4] = {};
+	context->CSSetShaderResources(0, ARRAYSIZE(nullViews), nullViews);
+	ID3D11UnorderedAccessView* nullUavs[2] = {};
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+	ID3D11ComputeShader* nullShader = nullptr;
+	context->CSSetShader(nullShader, nullptr, 0);
+
+	static auto gameViewport = Util::State_GetSingleton();
+	frameGenerationBuffersFrame = gameViewport->frameCount;
+	frameGenerationBuffersReady = true;
+	return true;
+}
+
+void Upscaling::CopyFrameGenerationBuffers()
+{
+	frameGenerationBuffersReady = false;
+	if (!WantsFrameGenerationInputs()) {
+		return;
+	}
+
+	static auto rendererData = RE::BSGraphics::GetRendererData();
+	auto context = reinterpret_cast<ID3D11DeviceContext*>(rendererData->context);
+	auto& colorPostAlpha = rendererData->renderTargets[(uint)Util::RenderTarget::kMainTemp];
+	auto& motionVector = rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors];
+	auto& depth = rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain];
+	if (!colorPostAlpha.texture || !colorPostAlpha.srView || !motionVector.texture || !motionVector.srView || !depth.srViewDepth) {
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC colorDesc{};
+	reinterpret_cast<ID3D11Texture2D*>(colorPostAlpha.texture)->GetDesc(&colorDesc);
+	D3D11_SHADER_RESOURCE_VIEW_DESC colorSRVDesc{};
+	reinterpret_cast<ID3D11ShaderResourceView*>(colorPostAlpha.srView)->GetDesc(&colorSRVDesc);
+	D3D11_TEXTURE2D_DESC motionVectorDesc{};
+	reinterpret_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&motionVectorDesc);
+
+	const auto renderSize = float2(
+		static_cast<float>(std::min(colorDesc.Width, motionVectorDesc.Width)),
+		static_cast<float>(std::min(colorDesc.Height, motionVectorDesc.Height)));
+	if (!EnsureFrameGenerationPatchResources(renderSize, colorDesc.Format, colorSRVDesc.Format, motionVectorDesc.Format)) {
+		return;
+	}
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	const D3D11_BOX sourceBox{ 0, 0, 0, static_cast<UINT>(renderSize.x), static_cast<UINT>(renderSize.y), 1 };
+	context->CopySubresourceRegion(
+		frameGenerationMotionVectorTexture->resource.get(),
+		0,
+		0,
+		0,
+		0,
+		reinterpret_cast<ID3D11Texture2D*>(motionVector.texture),
+		0,
+		&sourceBox);
+
+	auto shader = GetCopyDepthToFrameGenerationCS();
+	if (!shader) {
+		return;
+	}
+
+	ID3D11ShaderResourceView* views[] = { reinterpret_cast<ID3D11ShaderResourceView*>(depth.srViewDepth) };
+	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+	ID3D11UnorderedAccessView* uavs[] = { frameGenerationDepthTexture->uav.get() };
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	context->CSSetShader(shader, nullptr, 0);
+	context->Dispatch(static_cast<UINT>(std::ceil(renderSize.x / 8.0f)), static_cast<UINT>(std::ceil(renderSize.y / 8.0f)), 1);
+
+	ID3D11ShaderResourceView* nullViews[1] = {};
+	context->CSSetShaderResources(0, ARRAYSIZE(nullViews), nullViews);
+	ID3D11UnorderedAccessView* nullUavs[1] = {};
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+	ID3D11ComputeShader* nullShader = nullptr;
+	context->CSSetShader(nullShader, nullptr, 0);
+
+	static auto gameViewport = Util::State_GetSingleton();
+	frameGenerationBuffersFrame = gameViewport->frameCount;
+	frameGenerationBuffersReady = true;
+}
+
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod(bool a_checkMenu)
 {
 	auto streamline = Streamline::GetSingleton();
@@ -1334,6 +1642,24 @@ ID3D11ComputeShader* Upscaling::GetOverrideDepthCS()
 		overrideDepthCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/F4SE/Plugins/Upscaling/OverrideDepthCS.hlsl", {}, "cs_5_0"));
 	}
 	return overrideDepthCS.get();
+}
+
+ID3D11ComputeShader* Upscaling::GetCopyDepthToFrameGenerationCS()
+{
+	if (!copyDepthToFrameGenerationCS) {
+		logger::debug("Compiling CopyDepthToSharedBufferCS.hlsl");
+		copyDepthToFrameGenerationCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/F4SE/Plugins/FrameGeneration/CopyDepthToSharedBufferCS.hlsl", {}, "cs_5_0"));
+	}
+	return copyDepthToFrameGenerationCS.get();
+}
+
+ID3D11ComputeShader* Upscaling::GetGenerateFrameGenerationBuffersCS()
+{
+	if (!generateFrameGenerationBuffersCS) {
+		logger::debug("Compiling GenerateSharedBuffersCS.hlsl");
+		generateFrameGenerationBuffersCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/F4SE/Plugins/FrameGeneration/GenerateSharedBuffersCS.hlsl", {}, "cs_5_0"));
+	}
+	return generateFrameGenerationBuffersCS.get();
 }
 
 ID3D11PixelShader* Upscaling::GetBSImagespaceShaderSSLRRaytracing()
@@ -1558,6 +1884,17 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 
 			auto motionVectorSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].srView);
 			auto depthTextureSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain].srViewDepth);
+			const bool usePatchedFrameGenerationBuffers =
+				frameGenerationBuffersReady &&
+				frameGenerationBuffersFrame == gameViewport->frameCount &&
+				frameGenerationMotionVectorTexture &&
+				frameGenerationMotionVectorTexture->srv &&
+				frameGenerationDepthTexture &&
+				frameGenerationDepthTexture->srv;
+			if (usePatchedFrameGenerationBuffers) {
+				motionVectorSRV = frameGenerationMotionVectorTexture->srv.get();
+				depthTextureSRV = frameGenerationDepthTexture->srv.get();
+			}
 
 			ID3D11ShaderResourceView* views[2] = { motionVectorSRV, depthTextureSRV };
 			context->CSSetShaderResources(0, ARRAYSIZE(views), views);
@@ -1596,6 +1933,14 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 	}
 	else if (upscaleMethod == UpscaleMethod::kFSR && useD3D12FSR) {
 		auto motionVectorTexture = reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].texture);
+		const bool usePatchedFrameGenerationBuffers =
+			frameGenerationBuffersReady &&
+			frameGenerationBuffersFrame == gameViewport->frameCount &&
+			frameGenerationMotionVectorTexture &&
+			frameGenerationMotionVectorTexture->resource;
+		if (usePatchedFrameGenerationBuffers) {
+			motionVectorTexture = frameGenerationMotionVectorTexture->resource.get();
+		}
 		if (CaptureD3D12FSRInputs(a_renderTargetIndex, motionVectorTexture, fsrJitter, renderSize, displaySize) &&
 			DX12SwapChain::GetSingleton()->EvaluateD3D12FSRForCurrentFrame()) {
 			const auto frameIndex = DX12SwapChain::GetSingleton()->GetFrameIndex();
@@ -1647,6 +1992,12 @@ bool Upscaling::CaptureD3D12FSRInputs(int, ID3D11Texture2D* a_motionVectorTextur
 	if (frameIndex >= fsrD3D12InputsReady.size()) {
 		return false;
 	}
+	static auto gameViewport = Util::State_GetSingleton();
+	const bool usePatchedFrameGenerationBuffers =
+		frameGenerationBuffersReady &&
+		frameGenerationBuffersFrame == gameViewport->frameCount &&
+		frameGenerationDepthTexture &&
+		frameGenerationDepthTexture->resource;
 
 	D3D11_TEXTURE2D_DESC inputDesc{};
 	upscalingTexture->resource->GetDesc(&inputDesc);
@@ -1712,7 +2063,28 @@ bool Upscaling::CaptureD3D12FSRInputs(int, ID3D11Texture2D* a_motionVectorTextur
 	EnsureSharedD3D12Texture(depthDesc, fsrDepthSharedTextures[frameIndex], fsrDepthD3D12[frameIndex], true);
 
 	auto depthSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain].srViewDepth);
-	if (depthSRV && fsrDepthSharedTextures[frameIndex]->uav) {
+	if (usePatchedFrameGenerationBuffers) {
+		D3D11_TEXTURE2D_DESC patchedDepthDesc{};
+		frameGenerationDepthTexture->resource->GetDesc(&patchedDepthDesc);
+		const D3D11_BOX sourceBox{
+			0,
+			0,
+			0,
+			std::min<UINT>(patchedDepthDesc.Width, depthDesc.Width),
+			std::min<UINT>(patchedDepthDesc.Height, depthDesc.Height),
+			1
+		};
+		context->CopySubresourceRegion(
+			fsrDepthSharedTextures[frameIndex]->resource.get(),
+			0,
+			0,
+			0,
+			0,
+			frameGenerationDepthTexture->resource.get(),
+			0,
+			&sourceBox);
+	}
+	else if (depthSRV && fsrDepthSharedTextures[frameIndex]->uav) {
 		UpdateAndBindUpscalingCB(context, a_displaySize, a_renderSize);
 
 		ID3D11ShaderResourceView* views[] = { depthSRV };
@@ -1778,6 +2150,17 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 
 	auto depthTexture = reinterpret_cast<ID3D11Texture2D*>(rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain].texture);
 	auto motionVectorTexture = a_motionVectorTexture ? a_motionVectorTexture : reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].texture);
+	static auto gameViewport = Util::State_GetSingleton();
+	const bool usePatchedFrameGenerationBuffers =
+		frameGenerationBuffersReady &&
+		frameGenerationBuffersFrame == gameViewport->frameCount &&
+		frameGenerationMotionVectorTexture &&
+		frameGenerationMotionVectorTexture->resource &&
+		frameGenerationDepthTexture &&
+		frameGenerationDepthTexture->resource;
+	if (usePatchedFrameGenerationBuffers && !a_motionVectorTexture) {
+		motionVectorTexture = frameGenerationMotionVectorTexture->resource.get();
+	}
 
 	D3D11_TEXTURE2D_DESC motionVectorDesc{};
 	if (motionVectorTexture) {
@@ -1851,7 +2234,28 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 		EnsureSharedD3D12Texture(sharedDepthDesc, dlssgDepthSharedTextures[frameIndex], dlssgDepthD3D12[frameIndex], true);
 
 		auto depthSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain].srViewDepth);
-		if (depthSRV && dlssgDepthSharedTextures[frameIndex]->uav) {
+		if (usePatchedFrameGenerationBuffers) {
+			D3D11_TEXTURE2D_DESC patchedDepthDesc{};
+			frameGenerationDepthTexture->resource->GetDesc(&patchedDepthDesc);
+			const D3D11_BOX sourceBox{
+				0,
+				0,
+				0,
+				std::min<UINT>(patchedDepthDesc.Width, sharedDepthDesc.Width),
+				std::min<UINT>(patchedDepthDesc.Height, sharedDepthDesc.Height),
+				1
+			};
+			context->CopySubresourceRegion(
+				dlssgDepthSharedTextures[frameIndex]->resource.get(),
+				0,
+				0,
+				0,
+				0,
+				frameGenerationDepthTexture->resource.get(),
+				0,
+				&sourceBox);
+		}
+		else if (depthSRV && dlssgDepthSharedTextures[frameIndex]->uav) {
 			UpdateAndBindUpscalingCB(context, a_displaySize, a_renderSize);
 
 			ID3D11ShaderResourceView* views[] = { depthSRV };
@@ -2181,6 +2585,10 @@ void Upscaling::DestroyUpscalingResources()
 	dlssOutputTexture = nullptr;
 	dilatedMotionVectorTexture = nullptr;
 	dlssgHUDLessTexture = nullptr;
+	frameGenerationPreAlphaTexture = nullptr;
+	frameGenerationMotionVectorTexture = nullptr;
+	frameGenerationDepthTexture = nullptr;
+	frameGenerationBuffersReady = false;
 	for (auto i = 0; i < 2; ++i) {
 		dlssInputSharedTextures[i] = nullptr;
 		dlssSharpenedSharedTextures[i] = nullptr;
