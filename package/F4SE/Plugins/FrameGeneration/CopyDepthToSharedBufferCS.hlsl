@@ -1,7 +1,15 @@
 Texture2D<float> InputTexture : register(t0);
 RWTexture2D<float> OutputTexture : register(u0);
 
-[numthreads(8, 8, 1)] void main(uint3 DTid
-								: SV_DispatchThreadID) {
+[numthreads(8, 8, 1)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+	uint width;
+	uint height;
+	OutputTexture.GetDimensions(width, height);
+	if (DTid.x >= width || DTid.y >= height) {
+		return;
+	}
+
 	OutputTexture[DTid.xy] = InputTexture[DTid.xy];
 }
