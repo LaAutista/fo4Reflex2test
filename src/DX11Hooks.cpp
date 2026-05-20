@@ -44,6 +44,33 @@ namespace
 
 		return result;
 	}
+
+	Streamline* SelectStreamlineForD3D12Proxy(Streamline* a_streamline, IDXGIAdapter* a_adapter, bool a_wantsD3D12FrameGeneration)
+	{
+		if (!a_streamline || !a_streamline->interposer) {
+			return nullptr;
+		}
+
+		a_streamline->Initialize(sl::RenderAPI::eD3D12);
+		if (!a_streamline->UsesD3D12()) {
+			return nullptr;
+		}
+
+		a_streamline->CheckFeatures(a_adapter);
+		if constexpr (Upscaling::kForceFSRFrameGenerationForTesting) {
+			if (a_wantsD3D12FrameGeneration) {
+				logger::info("[DX12SwapChain] Streamline proxy disabled because FSR frame generation testing is forced");
+				return nullptr;
+			}
+		}
+
+		if (!a_streamline->featureDLSS && !a_streamline->featureDLSSG) {
+			logger::info("[DX12SwapChain] Streamline proxy disabled because DLSS and DLSS-G are unavailable");
+			return nullptr;
+		}
+
+		return a_streamline;
+	}
 }
 
 struct hkIDXGIFactoryCreateSwapChain
@@ -69,14 +96,6 @@ struct hkIDXGIFactoryCreateSwapChain
 			const bool wantsD3D12Upscaling = WantsD3D12Upscaling();
 			logger::info("[DX12SwapChain] ENB factory swapchain hook requested frameGeneration={} upscaling={}", wantsD3D12FrameGeneration, wantsD3D12Upscaling);
 
-			Streamline* streamlineForProxy = nullptr;
-			if (streamline->interposer) {
-				streamline->Initialize(sl::RenderAPI::eD3D12);
-				if (streamline->UsesD3D12() && !(Upscaling::kForceFSRFrameGenerationForTesting && wantsD3D12FrameGeneration)) {
-					streamlineForProxy = streamline;
-				}
-			}
-
 			winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
 			d3d11Device->GetImmediateContext(d3d11Context.put());
 
@@ -84,6 +103,8 @@ struct hkIDXGIFactoryCreateSwapChain
 			if (!adapter) {
 				throw DX::com_exception(E_FAIL);
 			}
+
+			Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), wantsD3D12FrameGeneration);
 
 			winrt::com_ptr<IDXGIFactory5> dxgiFactory;
 			DX::ThrowIfFailed(This->QueryInterface(IID_PPV_ARGS(dxgiFactory.put())));
@@ -99,7 +120,6 @@ struct hkIDXGIFactoryCreateSwapChain
 			}
 
 			if (streamline->UsesD3D12()) {
-				streamline->CheckFeatures(adapter.get());
 				streamline->PostDevice();
 			}
 
@@ -183,14 +203,6 @@ struct hkD3D11CreateDeviceAndSwapChain
 		if (useD3D12Proxy) {
 			try {
 				logger::info("[DX12SwapChain] D3D12 proxy swapchain requested at startup frameGeneration={} upscaling={}", wantsD3D12FrameGeneration, wantsD3D12Upscaling);
-				Streamline* streamlineForProxy = nullptr;
-				if (streamline->interposer) {
-					streamline->Initialize(sl::RenderAPI::eD3D12);
-					if (streamline->UsesD3D12() && !(Upscaling::kForceFSRFrameGenerationForTesting && wantsD3D12FrameGeneration)) {
-						streamlineForProxy = streamline;
-					}
-				}
-
 				winrt::com_ptr<ID3D11Device> d3d11Device;
 				winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
 				D3D_FEATURE_LEVEL createdFeatureLevel{};
@@ -211,6 +223,8 @@ struct hkD3D11CreateDeviceAndSwapChain
 					throw DX::com_exception(E_FAIL);
 				}
 
+				Streamline* streamlineForProxy = SelectStreamlineForD3D12Proxy(streamline, adapter.get(), wantsD3D12FrameGeneration);
+
 				winrt::com_ptr<IDXGIFactory5> dxgiFactory;
 				DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
@@ -225,7 +239,6 @@ struct hkD3D11CreateDeviceAndSwapChain
 				}
 
 				if (streamline->UsesD3D12()) {
-					streamline->CheckFeatures(adapter.get());
 					streamline->PostDevice();
 				}
 
@@ -256,7 +269,8 @@ struct hkD3D11CreateDeviceAndSwapChain
 			}
 		}
 
-		if (streamline->interposer && !streamline->initialized) {
+		const bool deferD3D11StreamlineInit = enbLoaded && pSwapChainDesc && pSwapChainDesc->Windowed;
+		if (streamline->interposer && !streamline->initialized && !deferD3D11StreamlineInit) {
 			streamline->Initialize(sl::RenderAPI::eD3D11);
 		}
 
@@ -272,6 +286,15 @@ struct hkD3D11CreateDeviceAndSwapChain
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext));
+
+		if (deferD3D11StreamlineInit && DX12SwapChain::GetSingleton()->IsReady()) {
+			logger::info("[DX12SwapChain] ENB factory hook created D3D12 proxy swapchain; skipping D3D11 Streamline initialization");
+			return S_OK;
+		}
+
+		if (streamline->interposer && !streamline->initialized) {
+			streamline->Initialize(sl::RenderAPI::eD3D11);
+		}
 			
 		if (streamline->interposer && !streamline->UsesD3D12()){
 			if (!enbLoaded)
