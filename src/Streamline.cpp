@@ -510,38 +510,12 @@ void Streamline::UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGene
 	static DXGI_FORMAT currentUIFormat = DXGI_FORMAT_UNKNOWN;
 
 	if (mode == sl::DLSSGMode::eOff) {
-		if (currentDLSSGMode == sl::DLSSGMode::eOff && !dlssgActive) {
-			return;
-		}
-
-		if (currentDLSSGMode != sl::DLSSGMode::eCount || dlssgActive) {
-			sl::DLSSGOptions options{};
-			options.mode = sl::DLSSGMode::eOff;
-			options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-			options.onErrorCallback = DLSSGAPIErrorCallback;
-
-			if (SL_FAILED(result, slDLSSGSetOptions(viewport, options))) {
-				logger::warn("[Streamline] Could not disable DLSS-G: {}", magic_enum::enum_name(result));
-				dlssgActive = false;
-				return;
-			}
-
-		}
-
-		currentDLSSGMode = sl::DLSSGMode::eOff;
-		currentDLSSGGeneratedFrames = generatedFrames;
-		currentDLSSGDynamicTargetFPS = 0;
-		currentRenderWidth = 0;
-		currentRenderHeight = 0;
-		currentDisplayWidth = 0;
-		currentDisplayHeight = 0;
-		currentColorFormat = DXGI_FORMAT_UNKNOWN;
-		currentMotionVectorFormat = DXGI_FORMAT_UNKNOWN;
-		currentDepthFormat = DXGI_FORMAT_UNKNOWN;
-		currentUIFormat = DXGI_FORMAT_UNKNOWN;
-		dlssgActive = false;
+		RequestDLSSGDisable();
 		return;
 	}
+
+	pendingDLSSGDisable = false;
+	dlssgPresentSafetyFrames = 0;
 
 	if (currentDLSSGMode == mode &&
 		currentDLSSGGeneratedFrames == generatedFrames &&
@@ -593,6 +567,66 @@ void Streamline::UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGene
 	currentUIFormat = a_uiFormat;
 	dlssgActive = mode != sl::DLSSGMode::eOff;
 
+}
+
+void Streamline::RequestDLSSGDisable()
+{
+	if (!dlssgActive && (currentDLSSGMode == sl::DLSSGMode::eOff || currentDLSSGMode == sl::DLSSGMode::eCount)) {
+		return;
+	}
+
+	pendingDLSSGDisable = true;
+}
+
+bool Streamline::DisableDLSSGNow()
+{
+	if (!featureDLSSG || !slDLSSGSetOptions) {
+		dlssgActive = false;
+		currentDLSSGMode = sl::DLSSGMode::eOff;
+		return false;
+	}
+
+	sl::DLSSGOptions options{};
+	options.mode = sl::DLSSGMode::eOff;
+	options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+	options.onErrorCallback = DLSSGAPIErrorCallback;
+
+	if (SL_FAILED(result, slDLSSGSetOptions(viewport, options))) {
+		logger::warn("[Streamline] Could not disable DLSS-G: {}", magic_enum::enum_name(result));
+		dlssgActive = false;
+		currentDLSSGMode = sl::DLSSGMode::eOff;
+		return false;
+	}
+
+	currentDLSSGMode = sl::DLSSGMode::eOff;
+	currentDLSSGGeneratedFrames = 0;
+	currentDLSSGDynamicTargetFPS = 0;
+	dlssgActive = false;
+	return true;
+}
+
+void Streamline::ApplyPendingDLSSGDisable()
+{
+	if (!pendingDLSSGDisable) {
+		return;
+	}
+
+	pendingDLSSGDisable = false;
+	if (DisableDLSSGNow()) {
+		dlssgPresentSafetyFrames = 2;
+	}
+}
+
+bool Streamline::NeedsDLSSGPresentSafety() const
+{
+	return dlssgActive || pendingDLSSGDisable || dlssgPresentSafetyFrames > 0;
+}
+
+void Streamline::OnDLSSGPresentComplete()
+{
+	if (!dlssgActive && !pendingDLSSGDisable && dlssgPresentSafetyFrames > 0) {
+		--dlssgPresentSafetyFrames;
+	}
 }
 
 void Streamline::TagDLSSGResources(ID3D11Texture2D* a_hudlessColor, ID3D11Texture2D* a_motionVectors, ID3D11Texture2D* a_depth, float2 a_renderSize, float2 a_displaySize)
@@ -707,13 +741,8 @@ void Streamline::QueryDLSSGState(std::string_view a_phase)
 	}
 
 	if (dlssgActive && state.status != sl::DLSSGStatus::eOk && slDLSSGSetOptions) {
-		sl::DLSSGOptions options{};
-		options.mode = sl::DLSSGMode::eOff;
-		if (SL_SUCCEEDED(result, slDLSSGSetOptions(viewport, options))) {
-			logger::warn("[Streamline] DLSS-G disabled due to runtime status {}", status);
-			dlssgActive = false;
-			currentDLSSGMode = sl::DLSSGMode::eOff;
-		}
+		logger::warn("[Streamline] DLSS-G disable requested due to runtime status {}", status);
+		RequestDLSSGDisable();
 	}
 }
 

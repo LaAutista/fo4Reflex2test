@@ -1777,7 +1777,7 @@ void Upscaling::UpdateUpscaling()
 	const bool frameGenerationThisFrame = ShouldUseFrameGeneration(true);
 	Streamline::GetSingleton()->UpdateReflex(settings.reflexMode, frameGenerationThisFrame);
 	if (!frameGenerationThisFrame) {
-		Streamline::GetSingleton()->UpdateDLSSG(false, settings.frameGenerationMode, settings.dlssgGeneratedFrames + 1, settings.dynamicMFGEnabled != 0, settings.dynamicMFGTargetFPS, { 0.0f, 0.0f }, { 0.0f, 0.0f }, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN);
+		Streamline::GetSingleton()->RequestDLSSGDisable();
 	}
 
 	CheckResources();
@@ -1884,15 +1884,20 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 
 			auto motionVectorSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].srView);
 			auto depthTextureSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->depthStencilTargets[(uint)Util::DepthStencilTarget::kMain].srViewDepth);
-			const bool usePatchedFrameGenerationBuffers =
+			const bool usePatchedMotionVectors =
 				frameGenerationBuffersReady &&
 				frameGenerationBuffersFrame == gameViewport->frameCount &&
 				frameGenerationMotionVectorTexture &&
-				frameGenerationMotionVectorTexture->srv &&
+				frameGenerationMotionVectorTexture->srv;
+			const bool usePatchedDepth =
+				upscaleMethod == UpscaleMethod::kDisabled &&
+				usePatchedMotionVectors &&
 				frameGenerationDepthTexture &&
 				frameGenerationDepthTexture->srv;
-			if (usePatchedFrameGenerationBuffers) {
+			if (usePatchedMotionVectors) {
 				motionVectorSRV = frameGenerationMotionVectorTexture->srv.get();
+			}
+			if (usePatchedDepth) {
 				depthTextureSRV = frameGenerationDepthTexture->srv.get();
 			}
 
@@ -1934,6 +1939,7 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 	else if (upscaleMethod == UpscaleMethod::kFSR && useD3D12FSR) {
 		auto motionVectorTexture = reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].texture);
 		const bool usePatchedFrameGenerationBuffers =
+			upscaleMethod == UpscaleMethod::kDisabled &&
 			frameGenerationBuffersReady &&
 			frameGenerationBuffersFrame == gameViewport->frameCount &&
 			frameGenerationMotionVectorTexture &&
@@ -1994,6 +2000,7 @@ bool Upscaling::CaptureD3D12FSRInputs(int, ID3D11Texture2D* a_motionVectorTextur
 	}
 	static auto gameViewport = Util::State_GetSingleton();
 	const bool usePatchedFrameGenerationBuffers =
+		upscaleMethod == UpscaleMethod::kDisabled &&
 		frameGenerationBuffersReady &&
 		frameGenerationBuffersFrame == gameViewport->frameCount &&
 		frameGenerationDepthTexture &&
@@ -2152,6 +2159,7 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 	auto motionVectorTexture = a_motionVectorTexture ? a_motionVectorTexture : reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].texture);
 	static auto gameViewport = Util::State_GetSingleton();
 	const bool usePatchedFrameGenerationBuffers =
+		!useD3D12DLSS &&
 		frameGenerationBuffersReady &&
 		frameGenerationBuffersFrame == gameViewport->frameCount &&
 		frameGenerationMotionVectorTexture &&

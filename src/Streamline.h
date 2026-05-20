@@ -166,6 +166,10 @@ public:
 	 * @brief Enable/disable DLSS-G for the current frame.
 	 */
 	void UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGenerate, bool a_dynamicMFGEnabled, uint a_dynamicMFGTargetFPS, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, DXGI_FORMAT a_uiFormat = DXGI_FORMAT_UNKNOWN);
+	void RequestDLSSGDisable();
+	void ApplyPendingDLSSGDisable();
+	bool NeedsDLSSGPresentSafety() const;
+	void OnDLSSGPresentComplete();
 	uint32_t GetCurrentFrameTokenIndex() const { return currentFrameTokenIndex; }
 	sl::FrameToken* GetFrameTokenForFrame(uint32_t a_frameIndex);
 	uint32_t GetLastPresentFrameTokenIndex() const { return lastPresentFrameTokenIndex; }
@@ -267,6 +271,7 @@ private:
 	bool ApplyNISSharpen(ID3D11Resource* a_inputColor, ID3D11Resource* a_outputColor, ID3D11DeviceContext* a_context, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness);
 	bool ApplyNISSharpenD3D12(ID3D12Resource* a_inputColor, ID3D12Resource* a_outputColor, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness);
 	void SetPCLMarker(sl::PCLMarker a_marker, sl::FrameToken* a_frameToken = nullptr);
+	bool DisableDLSSGNow();
 	uint32_t constantsFrameIndex = std::numeric_limits<uint32_t>::max();
 	uint32_t markerFrameIndex = std::numeric_limits<uint32_t>::max();
 	uint32_t lastDLSSGStatus = std::numeric_limits<uint32_t>::max();
@@ -284,4 +289,6 @@ private:
 	sl::DLSSGMode currentDLSSGMode = sl::DLSSGMode::eCount;
 	uint32_t currentDLSSGGeneratedFrames = 0;
 	uint32_t currentDLSSGDynamicTargetFPS = 0;
+	bool pendingDLSSGDisable = false;
+	uint32_t dlssgPresentSafetyFrames = 0;
 };

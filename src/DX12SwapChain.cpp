@@ -547,14 +547,19 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 	auto streamline = Streamline::GetSingleton();
 	const auto fidelityFXFrameGenerationActive = FidelityFX::GetSingleton()->IsFrameGenerationSwapChainActive();
-	const auto presentSyncInterval = (streamline->dlssgActive || fidelityFXFrameGenerationActive) ? 0u : SyncInterval;
-	const auto presentFlags = streamline->dlssgActive ? (Flags & ~DXGI_PRESENT_ALLOW_TEARING) : Flags;
+	const auto dlssgPresentSafety = streamline->NeedsDLSSGPresentSafety();
+	const auto presentSyncInterval = (dlssgPresentSafety || fidelityFXFrameGenerationActive) ? 0u : SyncInterval;
+	const auto presentFlags = dlssgPresentSafety ? (Flags & ~DXGI_PRESENT_ALLOW_TEARING) : Flags;
 	UpdateCursorClip(swapChain.get());
 	streamline->OnPresentStart();
 	const auto presentStart = std::chrono::steady_clock::now();
 	const auto result = swapChain->Present(presentSyncInterval, presentFlags);
 	const auto presentEnd = std::chrono::steady_clock::now();
 	streamline->OnPresentEnd(result, false);
+	if (SUCCEEDED(result)) {
+		streamline->ApplyPendingDLSSGDisable();
+		streamline->OnDLSSGPresentComplete();
+	}
 	if (FAILED(result)) {
 		const auto d3d12RemovedReason = d3d12Device ? d3d12Device->GetDeviceRemovedReason() : S_OK;
 		HRESULT d3d11RemovedReason = S_OK;
@@ -601,7 +606,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	streamline->QueryDLSSGState("post-wait");
 
 	static bool loggedPresentAdjustment = false;
-	if (streamline->dlssgActive && !loggedPresentAdjustment && (presentSyncInterval != SyncInterval || presentFlags != Flags)) {
+	if (dlssgPresentSafety && !loggedPresentAdjustment && (presentSyncInterval != SyncInterval || presentFlags != Flags)) {
 		logger::info(
 			"[DX12SwapChain] DLSS-G adjusted present sync {}->{} flags 0x{:X}->0x{:X}",
 			SyncInterval,
