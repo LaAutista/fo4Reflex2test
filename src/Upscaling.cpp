@@ -91,6 +91,18 @@ namespace
 		}
 	}
 
+	uint GetEffectiveQualityMode(Upscaling::UpscaleMethod a_upscaleMethod, uint a_qualityMode)
+	{
+		// ENB does not support this plugin's render-resolution scaling, but native AA
+		// still runs at 1.0 scale and can feed frame generation.
+		if (enbLoaded && a_qualityMode != 0 &&
+			(a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS)) {
+			return 0;
+		}
+
+		return a_qualityMode;
+	}
+
 	float Halton(uint32_t a_index, uint32_t a_base)
 	{
 		float result = 0.0f;
@@ -1527,13 +1539,6 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod(bool a_checkMenu)
 	if (!streamline->featureDLSS && currentUpscaleMethod == UpscaleMethod::kDLSS)
 		currentUpscaleMethod = UpscaleMethod::kFSR;
 
-	// ENB does not support this plugin's render-resolution scaling. Native AA
-	// still runs at 1.0 scale and can feed frame generation.
-	if (enbLoaded && settings.qualityMode != 0 &&
-		(currentUpscaleMethod == UpscaleMethod::kFSR || currentUpscaleMethod == UpscaleMethod::kDLSS)) {
-		currentUpscaleMethod = UpscaleMethod::kDisabled;
-	}
-
 	return currentUpscaleMethod;
 }
 
@@ -1800,7 +1805,8 @@ void Upscaling::UpdateUpscaling()
 
 	// Menus that render their own scene, like Pip-Boy, disable upscaling and need native render targets.
 	// Overlay-only menus keep the gameplay scaler because GetUpscaleMethod(true) remains enabled.
-	float resolutionScale = upscaleMethod == UpscaleMethod::kDisabled ? 1.0f : 1.0f / GetUpscaleRatioFromQualityMode(settings.qualityMode);
+	const auto effectiveQualityMode = GetEffectiveQualityMode(upscaleMethod, settings.qualityMode);
+	float resolutionScale = upscaleMethod == UpscaleMethod::kDisabled ? 1.0f : 1.0f / GetUpscaleRatioFromQualityMode(effectiveQualityMode);
 
 	// Calculate mipmap LOD bias
 	// Example: 0.67 scale -> log2(0.67) = -0.58
@@ -2008,7 +2014,8 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 	const bool useD3D12FSR = upscaleMethod == UpscaleMethod::kFSR && DX12SwapChain::GetSingleton()->IsReady();
 	auto fsrJitter = jitter;
 	if (upscaleMethod == UpscaleMethod::kDLSS && !useD3D12DLSS) {
-		Streamline::GetSingleton()->Upscale(upscalingTexture.get(), dlssOutputTexture.get(), dilatedMotionVectorTexture.get(), jitter, renderSize, displaySize, settings.qualityMode, settings.sharpness);
+		const auto effectiveQualityMode = GetEffectiveQualityMode(upscaleMethod, settings.qualityMode);
+		Streamline::GetSingleton()->Upscale(upscalingTexture.get(), dlssOutputTexture.get(), dilatedMotionVectorTexture.get(), jitter, renderSize, displaySize, effectiveQualityMode, settings.sharpness);
 		context->CopyResource(frameBufferResource, dlssOutputTexture->resource.get());
 	}
 	else if (upscaleMethod == UpscaleMethod::kFSR && useD3D12FSR) {
@@ -2538,7 +2545,7 @@ bool Upscaling::EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint
 		dlssD3D12ColorFormats[a_frameIndex],
 		dlssD3D12MotionVectorFormats[a_frameIndex],
 		dlssD3D12DepthFormats[a_frameIndex],
-		settings.qualityMode,
+		GetEffectiveQualityMode(UpscaleMethod::kDLSS, settings.qualityMode),
 		settings.sharpness,
 		&dlssD3D12Sharpened[a_frameIndex]);
 
