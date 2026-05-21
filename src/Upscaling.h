@@ -108,6 +108,9 @@ public:
 	/**
 	 * @brief Determine whether DLSS-G should run for the current frame.
 	 */
+	bool ShouldBlockUpscaling() const;
+	bool ShouldBlockFrameGeneration() const;
+	bool ShouldBlockTemporalFeatures() const;
 	bool ShouldUseFrameGeneration(bool a_checkMenu);
 	bool ShouldUseFSRFrameGeneration(bool a_checkMenu);
 

@@ -1515,22 +1515,46 @@ void Upscaling::CopyFrameGenerationBuffers()
 	frameGenerationBuffersReady = true;
 }
 
+bool Upscaling::ShouldBlockTemporalFeatures() const
+{
+	if (const auto ui = RE::UI::GetSingleton()) {
+		if (ui->freezeFramePause > 0) {
+			return true;
+		}
+
+		RE::BSAutoReadLock lock{ RE::UI::GetMenuMapRWLock() };
+		for (const auto& menu : ui->menuStack) {
+			if (menu && menu->OnStack() && menu->menuFlags.all(RE::UI_MENU_FLAGS::kPausesGame)) {
+				return true;
+			}
+		}
+	}
+
+	if (auto main = RE::Main::GetSingleton()) {
+		if (!main->gameActive || main->inMenuMode) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool Upscaling::ShouldBlockUpscaling() const
+{
+	return ShouldBlockTemporalFeatures();
+}
+
+bool Upscaling::ShouldBlockFrameGeneration() const
+{
+	return ShouldBlockTemporalFeatures() || !dlssgMenuResumeReady;
+}
+
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod(bool a_checkMenu)
 {
 	auto streamline = Streamline::GetSingleton();
-	
-	static auto ui = RE::UI::GetSingleton();
-	
-	// Disable the upscaling method when certain menus are open
-	if (a_checkMenu){
-		if (ui->GetMenuOpen("ExamineMenu") 
-			|| ui->GetMenuOpen("PipboyMenu") 
-			|| ui->GetMenuOpen("LoadingMenu") 
-			|| ui->GetMenuOpen("TerminalMenu")
-			|| ui->GetMenuOpen("ContainerMenu")
-			|| ui->GetMenuOpen("BarterMenu")
-			|| ui->GetMenuOpen("PauseMenu"))
-			return UpscaleMethod::kDisabled;
+
+	if (a_checkMenu && ShouldBlockUpscaling()) {
+		return UpscaleMethod::kDisabled;
 	}
 
 	UpscaleMethod currentUpscaleMethod = (UpscaleMethod)settings.upscaleMethodPreference;
@@ -1550,31 +1574,12 @@ bool Upscaling::ShouldUseFrameGeneration(bool a_checkMenu)
 		return false;
 	}
 
-	if (a_checkMenu && !dlssgMenuResumeReady) {
-		return false;
-	}
-
 	if ((settings.frameGenerationMode == 0 && settings.dynamicMFGEnabled == 0) || !streamline->featureDLSSG) {
 		return false;
 	}
 
-	if (a_checkMenu) {
-		static auto ui = RE::UI::GetSingleton();
-		if (ui->GetMenuOpen("ExamineMenu") ||
-			ui->GetMenuOpen("PipboyMenu") ||
-			ui->GetMenuOpen("LoadingMenu") ||
-			ui->GetMenuOpen("TerminalMenu") ||
-			ui->GetMenuOpen("ContainerMenu") ||
-			ui->GetMenuOpen("BarterMenu") ||
-			ui->GetMenuOpen("PauseMenu")) {
-			return false;
-		}
-
-		if (auto main = RE::Main::GetSingleton()) {
-			if (!main->gameActive || main->inMenuMode) {
-				return false;
-			}
-		}
+	if (a_checkMenu && ShouldBlockFrameGeneration()) {
+		return false;
 	}
 
 	return true;
@@ -1593,23 +1598,8 @@ bool Upscaling::ShouldUseFSRFrameGeneration(bool a_checkMenu)
 		return false;
 	}
 
-	if (a_checkMenu) {
-		static auto ui = RE::UI::GetSingleton();
-		if (ui->GetMenuOpen("ExamineMenu") ||
-			ui->GetMenuOpen("PipboyMenu") ||
-			ui->GetMenuOpen("LoadingMenu") ||
-			ui->GetMenuOpen("TerminalMenu") ||
-			ui->GetMenuOpen("ContainerMenu") ||
-			ui->GetMenuOpen("BarterMenu") ||
-			ui->GetMenuOpen("PauseMenu")) {
-			return false;
-		}
-
-		if (auto main = RE::Main::GetSingleton()) {
-			if (!main->gameActive || main->inMenuMode) {
-				return false;
-			}
-		}
+	if (a_checkMenu && ShouldBlockFrameGeneration()) {
+		return false;
 	}
 
 	return true;
