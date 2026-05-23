@@ -120,6 +120,15 @@
 			}
 		},
 		{
+			"id": "bReflex2LatewarpEnabled:Settings",
+			"text": "NVIDIA Reflex 2 Latewarp",
+			"type": "switcher",
+			"help": "Experimental Latewarp test path using the Reflex2 demo NGX runtime. It is disabled by default and may fail on unsupported drivers or resource states.",
+			"valueOptions": {
+				"sourceType": "ModSettingInt"
+			}
+		},
+		{
 			"text": "DYNAMIC MULTI FRAME GENERATION",
 			"type": "section"
 		},

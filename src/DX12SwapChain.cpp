@@ -510,6 +510,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	commandLists[frameIndex]->CopyResource(destination, source);
 
 	Upscaling::GetSingleton()->TagDLSSGInputs(commandLists[frameIndex].get(), frameIndex);
+	Upscaling::GetSingleton()->EvaluateReflex2Latewarp(commandLists[frameIndex].get(), frameIndex, destination);
 	if (FidelityFX::GetSingleton()->IsFrameGenerationSwapChainActive() &&
 		!Upscaling::GetSingleton()->ShouldUseFSRFrameGeneration(true)) {
 		const auto desc = destination->GetDesc();

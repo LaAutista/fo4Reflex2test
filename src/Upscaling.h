@@ -5,6 +5,7 @@
 #include "FidelityFX.h"
 #include "Streamline.h"
 
+#include <DirectXMath.h>
 #include <array>
 #include <memory>
 #include <vector>
@@ -84,6 +85,7 @@ public:
 		uint dynamicMFGEnabled = 0;                                 ///< Enable DLSS-G Dynamic Multi Frame Generation when supported
 		uint dynamicMFGTargetFPS = 300;                              ///< Dynamic MFG target FPS; 0 lets Streamline auto-detect display refresh
 		uint reflexMode = 1;                                        ///< Reflex mode: 0=Off, 1=On, 2=On + Boost
+		uint reflex2LatewarpEnabled = 0;                            ///< Experimental Reflex 2 Latewarp test path
 		float sharpness = 0.2f;                                       ///< Upscaler sharpness: 0.0=off, 1.0=max
 	};
 
@@ -152,6 +154,7 @@ public:
 	bool EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	bool EvaluateD3D12FSR(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	bool EvaluateFSRFrameGeneration(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
+	bool EvaluateReflex2Latewarp(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex, ID3D12Resource* a_backbuffer);
 	void TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 
 	/**
@@ -393,8 +396,10 @@ public:
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrDepthD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrOpaqueOnlyD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrReactiveMaskD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, 2> reflex2LatewarpOutputD3D12;
 	std::array<bool, 2> dlssgInputsReady{};
 	std::array<bool, 2> fsrFrameGenerationInputsReady{};
+	std::array<bool, 2> reflex2LatewarpInputsReady{};
 	std::array<bool, 2> fsrD3D12InputsReady{};
 	std::array<uint32_t, 2> dlssgInputFrameTokenIndices{};
 	std::array<bool, 2> dlssD3D12InputsReady{};
@@ -410,6 +415,13 @@ public:
 	std::array<float2, 2> fsrInputJitters{};
 	std::array<float2, 2> fsrInputRenderSizes{};
 	std::array<float2, 2> fsrInputDisplaySizes{};
+	std::array<DirectX::XMFLOAT4X4, 2> reflex2WorldToViewMatrices{};
+	std::array<DirectX::XMFLOAT4X4, 2> reflex2ViewToClipMatrices{};
+	std::array<DirectX::XMFLOAT4X4, 2> reflex2PrevWorldToViewMatrices{};
+	std::array<DirectX::XMFLOAT4X4, 2> reflex2PrevViewToClipMatrices{};
+	DirectX::XMFLOAT4X4 reflex2LastWorldToViewMatrix{};
+	DirectX::XMFLOAT4X4 reflex2LastViewToClipMatrix{};
+	bool reflex2HasLastMatrices = false;
 	bool d3d12DLSSMenuSuspended = false;
 	bool dlssgMenuResumeReady = true;
 	uint32_t dlssgStableGameplayFrames = 0;
