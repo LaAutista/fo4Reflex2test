@@ -27,6 +27,12 @@ jobs:
           path: extern/Streamline
           sparse-checkout: include
 
+      - name: Patch Streamline C++23 header
+        shell: pwsh
+        run: |
+          $header = "extern/Streamline/include/sl_pcl.h"
+          (Get-Content $header) -replace "using to_underlying = std::to_underlying;", "using std::to_underlying;" | Set-Content $header
+
       - name: Fetch FidelityFX SDK
         uses: actions/checkout@v4
         with:
