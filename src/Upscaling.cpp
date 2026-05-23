@@ -7,6 +7,7 @@
 #include <SimpleIni.h>
 
 #include "DX12SwapChain.h"
+#include "Reflex2Latewarp.h"
 
 extern bool enbLoaded;
 
@@ -730,6 +731,7 @@ void Upscaling::LoadSettings()
 	settings.dynamicMFGTargetFPS = static_cast<uint>(ini.GetLongValue("Settings", "iDynamicMFGTargetFPS", 300));
 	settings.reflexMode = static_cast<uint>(ini.GetLongValue("Settings", "iReflexMode", 1));
 	settings.dlssModelPreset = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iDLSSModelPreset", 0), 0, 4));
+	settings.reflex2LatewarpEnabled = static_cast<uint>(ini.GetLongValue("Settings", "bReflex2LatewarpEnabled", 0));
 	settings.osdMode = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iOnScreenDisplay", 0), 0, 2));
 	settings.taggedTextureDebug = static_cast<uint>(ini.GetLongValue("Settings", "bTaggedTextureDebug", 0) == 1);
 	const auto legacySharpness = ini.GetDoubleValue("Settings", "fRCASSharpness", 0.2);
@@ -2053,6 +2055,7 @@ void Upscaling::UpdateUpscaling()
 			if (!fsrFrameGenerationActive && fsrFrameGenerationInputsReady[i]) {
 				fsrFrameGenerationInputsReady[i] = false;
 			}
+			reflex2LatewarpInputsReady[i] = false;
 		}
 	}
 
@@ -2499,13 +2502,17 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 	const bool useD3D12DLSS = d3d12DLSSActive && upscalingTexture;
 	const bool useFrameGeneration = frameGenerationActive;
 	const bool useFSRFrameGeneration = fsrFrameGenerationActive;
-	if (!useFrameGeneration && !useFSRFrameGeneration && !useD3D12DLSS) {
+	const bool useReflex2Latewarp = settings.reflex2LatewarpEnabled != 0 && Streamline::GetSingleton()->UsesD3D12() && DX12SwapChain::GetSingleton()->IsReady();
+	if (!useFrameGeneration && !useFSRFrameGeneration && !useD3D12DLSS && !useReflex2Latewarp) {
 		return;
 	}
 
 	static auto rendererData = RE::BSGraphics::GetRendererData();
 	auto context = reinterpret_cast<ID3D11DeviceContext*>(rendererData->context);
 	auto streamline = Streamline::GetSingleton();
+	if (useReflex2Latewarp && !Reflex2::Latewarp::GetSingleton()->IsLoaded()) {
+		Reflex2::Latewarp::GetSingleton()->Load(std::filesystem::path(streamline->interposerDirectory));
+	}
 
 	auto frameBufferSRV = reinterpret_cast<ID3D11ShaderResourceView*>(rendererData->renderTargets[a_renderTargetIndex].srView);
 	if (!frameBufferSRV) {
@@ -2816,9 +2823,9 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 			dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
 		}
 
-		if (useFrameGeneration || useD3D12DLSS) {
-			streamline->UpdateReflex(settings.reflexMode, useFrameGeneration);
+		if (useFrameGeneration || useD3D12DLSS || useReflex2Latewarp) {
 			streamline->UpdateConstants(jitter);
+			streamline->UpdateReflex(settings.reflexMode, useFrameGeneration || useReflex2Latewarp);
 		}
 		const auto dlssgInputSize = float2(static_cast<float>(sharedMotionVectorDesc.Width), static_cast<float>(sharedMotionVectorDesc.Height));
 		if (useFrameGeneration) {
@@ -2831,12 +2838,34 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 		dlssgInputFrameTokenIndices[frameIndex] = streamline->GetCurrentFrameTokenIndex();
 		dlssgInputsReady[frameIndex] = useFrameGeneration;
 		fsrFrameGenerationInputsReady[frameIndex] = useFSRFrameGeneration;
+		reflex2LatewarpInputsReady[frameIndex] = useReflex2Latewarp && Reflex2::Latewarp::GetSingleton()->IsLoaded();
 		fsrFrameGenerationColorFormats[frameIndex] = frameBufferDesc.Format;
 		fsrFrameGenerationFrameIDs[frameIndex] = fsrFrameGenerationFrameID++;
 		dlssD3D12InputsReady[frameIndex] = useD3D12DLSS;
 		dlssD3D12ColorFormats[frameIndex] = frameBufferDesc.Format;
 		dlssD3D12MotionVectorFormats[frameIndex] = sharedMotionVectorDesc.Format;
 		dlssD3D12DepthFormats[frameIndex] = sharedDepthDesc.Format;
+
+		if (useReflex2Latewarp) {
+			const auto aspectRatio = a_displaySize.y > 0.0f ? a_displaySize.x / a_displaySize.y : 1.0f;
+			auto& viewData = gameViewport->cameraState.camViewData;
+			const auto worldToView = Util::ToXMMatrix(viewData.viewMat);
+			const auto viewToClip = Util::GetCameraProjection(aspectRatio).cameraViewToClip;
+
+			if (reflex2HasLastMatrices) {
+				reflex2PrevWorldToViewMatrices[frameIndex] = reflex2LastWorldToViewMatrix;
+				reflex2PrevViewToClipMatrices[frameIndex] = reflex2LastViewToClipMatrix;
+			} else {
+				DirectX::XMStoreFloat4x4(&reflex2PrevWorldToViewMatrices[frameIndex], worldToView);
+				DirectX::XMStoreFloat4x4(&reflex2PrevViewToClipMatrices[frameIndex], viewToClip);
+			}
+
+			DirectX::XMStoreFloat4x4(&reflex2WorldToViewMatrices[frameIndex], worldToView);
+			DirectX::XMStoreFloat4x4(&reflex2ViewToClipMatrices[frameIndex], viewToClip);
+			reflex2LastWorldToViewMatrix = reflex2WorldToViewMatrices[frameIndex];
+			reflex2LastViewToClipMatrix = reflex2ViewToClipMatrices[frameIndex];
+			reflex2HasLastMatrices = true;
+		}
 
 		frameBufferResource->Release();
 		return;
@@ -3047,6 +3076,122 @@ bool Upscaling::EvaluateFSRFrameGeneration(ID3D12GraphicsCommandList* a_commandL
 
 	fsrFrameGenerationInputsReady[a_frameIndex] = false;
 	return succeeded;
+}
+
+bool Upscaling::EvaluateReflex2Latewarp(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex, ID3D12Resource* a_backbuffer)
+{
+	if (a_frameIndex >= reflex2LatewarpInputsReady.size() || !reflex2LatewarpInputsReady[a_frameIndex]) {
+		return false;
+	}
+
+	reflex2LatewarpInputsReady[a_frameIndex] = false;
+
+	auto* hudlessColor = dlssgHUDLessD3D12[a_frameIndex].get();
+	auto* motionVectors = dlssgMotionVectorD3D12[a_frameIndex].get();
+	auto* depth = dlssgDepthD3D12[a_frameIndex].get();
+	auto* uiColorAlpha = dlssgUIColorAlphaD3D12[a_frameIndex].get();
+	if (!a_commandList || !a_backbuffer || !hudlessColor || !motionVectors || !depth) {
+		return false;
+	}
+
+	auto* latewarp = Reflex2::Latewarp::GetSingleton();
+	if (!latewarp->IsLoaded()) {
+		return false;
+	}
+
+	const auto backbufferDesc = a_backbuffer->GetDesc();
+	auto outputDesc = backbufferDesc;
+	outputDesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+	outputDesc.Flags &= ~D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+	auto& output = reflex2LatewarpOutputD3D12[a_frameIndex];
+	bool recreateOutput = !output;
+	if (!recreateOutput) {
+		const auto currentDesc = output->GetDesc();
+		recreateOutput =
+			currentDesc.Width != outputDesc.Width ||
+			currentDesc.Height != outputDesc.Height ||
+			currentDesc.Format != outputDesc.Format ||
+			(currentDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0;
+	}
+
+	if (recreateOutput) {
+		output = nullptr;
+		const auto heapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+		const auto result = DX12SwapChain::GetSingleton()->GetD3D12Device()->CreateCommittedResource(
+			&heapProperties,
+			D3D12_HEAP_FLAG_NONE,
+			&outputDesc,
+			D3D12_RESOURCE_STATE_COMMON,
+			nullptr,
+			IID_PPV_ARGS(output.put()));
+		if (FAILED(result)) {
+			logger::warn("[Reflex2] Could not create Latewarp output texture: 0x{:08X}", static_cast<uint32_t>(result));
+			return false;
+		}
+	}
+
+	const auto shaderReadState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	std::vector<D3D12_RESOURCE_BARRIER> beforeEvaluate{
+		CD3DX12_RESOURCE_BARRIER::Transition(a_backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, shaderReadState),
+		CD3DX12_RESOURCE_BARRIER::Transition(hudlessColor, D3D12_RESOURCE_STATE_COMMON, shaderReadState),
+		CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, D3D12_RESOURCE_STATE_COMMON, shaderReadState),
+		CD3DX12_RESOURCE_BARRIER::Transition(depth, D3D12_RESOURCE_STATE_COMMON, shaderReadState),
+		CD3DX12_RESOURCE_BARRIER::Transition(output.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+	};
+	if (uiColorAlpha) {
+		beforeEvaluate.push_back(CD3DX12_RESOURCE_BARRIER::Transition(uiColorAlpha, D3D12_RESOURCE_STATE_COMMON, shaderReadState));
+	}
+	a_commandList->ResourceBarrier(static_cast<UINT>(beforeEvaluate.size()), beforeEvaluate.data());
+
+	Reflex2::LatewarpInputs inputs{};
+	inputs.backbuffer = a_backbuffer;
+	inputs.hudlessColor = hudlessColor;
+	inputs.uiColorAlpha = uiColorAlpha;
+	inputs.depth = depth;
+	inputs.motionVectors = motionVectors;
+	inputs.outputColor = output.get();
+
+	inputs.backbufferSize = { static_cast<uint32_t>(backbufferDesc.Width), backbufferDesc.Height };
+	inputs.hudlessColorSize = { static_cast<uint32_t>(dlssgInputDisplaySizes[a_frameIndex].x), static_cast<uint32_t>(dlssgInputDisplaySizes[a_frameIndex].y) };
+	inputs.uiColorAlphaSize = inputs.hudlessColorSize;
+	inputs.depthSize = { static_cast<uint32_t>(dlssgInputRenderSizes[a_frameIndex].x), static_cast<uint32_t>(dlssgInputRenderSizes[a_frameIndex].y) };
+	inputs.motionVectorSize = inputs.depthSize;
+	inputs.outputSize = inputs.backbufferSize;
+	inputs.frameID = dlssgInputFrameTokenIndices[a_frameIndex];
+	inputs.isRenderedFrame = true;
+	inputs.depthInverted = false;
+	inputs.usePremultiplyUIAlpha = false;
+	inputs.jitterOffsetX = -jitter.x;
+	inputs.jitterOffsetY = -jitter.y;
+	inputs.worldToViewMatrix = &reflex2WorldToViewMatrices[a_frameIndex]._11;
+	inputs.viewToClipMatrix = &reflex2ViewToClipMatrices[a_frameIndex]._11;
+	inputs.previousRenderedWorldToViewMatrix = &reflex2PrevWorldToViewMatrices[a_frameIndex]._11;
+	inputs.previousRenderedViewToClipMatrix = &reflex2PrevViewToClipMatrices[a_frameIndex]._11;
+
+	const auto succeeded = latewarp->Evaluate(a_commandList, inputs);
+
+	std::vector<D3D12_RESOURCE_BARRIER> afterEvaluate{
+		CD3DX12_RESOURCE_BARRIER::Transition(a_backbuffer, shaderReadState, D3D12_RESOURCE_STATE_COPY_DEST),
+		CD3DX12_RESOURCE_BARRIER::Transition(hudlessColor, shaderReadState, D3D12_RESOURCE_STATE_COMMON),
+		CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, shaderReadState, D3D12_RESOURCE_STATE_COMMON),
+		CD3DX12_RESOURCE_BARRIER::Transition(depth, shaderReadState, D3D12_RESOURCE_STATE_COMMON),
+		CD3DX12_RESOURCE_BARRIER::Transition(output.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, succeeded ? D3D12_RESOURCE_STATE_COPY_SOURCE : D3D12_RESOURCE_STATE_COMMON)
+	};
+	if (uiColorAlpha) {
+		afterEvaluate.push_back(CD3DX12_RESOURCE_BARRIER::Transition(uiColorAlpha, shaderReadState, D3D12_RESOURCE_STATE_COMMON));
+	}
+	a_commandList->ResourceBarrier(static_cast<UINT>(afterEvaluate.size()), afterEvaluate.data());
+
+	if (!succeeded) {
+		return false;
+	}
+
+	a_commandList->CopyResource(a_backbuffer, output.get());
+
+	const auto outputToCommon = CD3DX12_RESOURCE_BARRIER::Transition(output.get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+	a_commandList->ResourceBarrier(1, &outputToCommon);
+	return true;
 }
 
 void Upscaling::TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex)

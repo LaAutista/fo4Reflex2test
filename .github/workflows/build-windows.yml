@@ -1,0 +1,76 @@
+name: Build Windows DLL
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - reflex2-latewarp
+  pull_request:
+
+jobs:
+  build:
+    name: Build Upscaling.dll
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Update xmake repositories
+        shell: pwsh
+        run: xmake repo -u
+
+      - name: Configure build
+        shell: pwsh
+        run: xmake f -m releasedbg -a x64 -y
+
+      - name: Build
+        shell: pwsh
+        run: xmake -y
+
+      - name: Create installable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $dist = Join-Path $PWD "artifact/Upscaling-Reflex2-Latewarp"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          Copy-Item -Path "package/*" -Destination $dist -Recurse -Force
+
+          $dll = Get-ChildItem -Path "build" -Filter "Upscaling.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) {
+            throw "Upscaling.dll was not found under the xmake build directory."
+          }
+
+          $pluginDir = Join-Path $dist "F4SE/Plugins"
+          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+          Copy-Item -Path $dll.FullName -Destination (Join-Path $pluginDir "Upscaling.dll") -Force
+
+          Get-ChildItem -Path $dist -Recurse | Select-Object FullName, Length
+
+      - name: Upload installable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Upscaling-Reflex2-Latewarp
+          path: artifact/Upscaling-Reflex2-Latewarp
+
+      - name: Upload raw build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmake-build-output
+          path: build

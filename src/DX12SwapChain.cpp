@@ -646,6 +646,8 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	if (upscaling->IsFrameGenerationActive() || dlssgPresentSafety) {
 		upscaling->TagDLSSGInputs(commandList, frameIndex);
 	}
+	upscaling->EvaluateReflex2Latewarp(commandList, frameIndex, destination);
+
 	auto fidelityFX = FidelityFX::GetSingleton();
 	if (fidelityFX->IsFrameGenerationEnabled() &&
 		!upscaling->IsFSRFrameGenerationActive()) {

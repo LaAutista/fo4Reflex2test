@@ -6,6 +6,7 @@
 #include "FrameCount.h"
 #include "Streamline.h"
 
+#include <DirectXMath.h>
 #include <array>
 #include <initializer_list>
 #include <memory>
@@ -86,6 +87,7 @@ public:
 		uint dynamicMFGTargetFPS = 300;                              ///< Dynamic MFG target FPS; 0 lets Streamline auto-detect display refresh
 		uint reflexMode = 1;                                        ///< Reflex mode: 0=Off, 1=On, 2=On + Boost
 		uint dlssModelPreset = 0;                                   ///< DLSS model preset: 0=Recommended, 1=Default, 2=K, 3=M, 4=L
+		uint reflex2LatewarpEnabled = 0;                            ///< Experimental Reflex 2 Latewarp test path
 		uint osdMode = 0;                                           ///< Debug OSD: 0=Off, 1=Compact, 2=Detailed
 		uint taggedTextureDebug = 0;                                ///< Debug tagged texture view: 0=Off, 1=On
 		float sharpness = 0.2f;                                       ///< Upscaler sharpness: 0.0=off, 1.0=max
@@ -160,6 +162,7 @@ public:
 	bool EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	bool EvaluateD3D12FSR(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	bool EvaluateFSRFrameGeneration(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
+	bool EvaluateReflex2Latewarp(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex, ID3D12Resource* a_backbuffer);
 	void TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	void GetTaggedTextureDebugResources(uint32_t a_frameIndex, ID3D12Resource*& a_color, ID3D12Resource*& a_depth, ID3D12Resource*& a_motionVectors) const;
 
@@ -408,8 +411,10 @@ public:
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrOpaqueOnlyD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrReactiveMaskD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> debugMotionVectorD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> reflex2LatewarpOutputD3D12;
 	std::array<bool, kDX12FrameCount> dlssgInputsReady{};
 	std::array<bool, kDX12FrameCount> fsrFrameGenerationInputsReady{};
+	std::array<bool, kDX12FrameCount> reflex2LatewarpInputsReady{};
 	std::array<bool, kDX12FrameCount> fsrD3D12InputsReady{};
 	std::array<uint32_t, kDX12FrameCount> dlssgInputFrameTokenIndices{};
 	std::array<bool, kDX12FrameCount> dlssD3D12InputsReady{};
@@ -425,6 +430,13 @@ public:
 	std::array<float2, kDX12FrameCount> fsrInputJitters{};
 	std::array<float2, kDX12FrameCount> fsrInputRenderSizes{};
 	std::array<float2, kDX12FrameCount> fsrInputDisplaySizes{};
+	std::array<DirectX::XMFLOAT4X4, kDX12FrameCount> reflex2WorldToViewMatrices{};
+	std::array<DirectX::XMFLOAT4X4, kDX12FrameCount> reflex2ViewToClipMatrices{};
+	std::array<DirectX::XMFLOAT4X4, kDX12FrameCount> reflex2PrevWorldToViewMatrices{};
+	std::array<DirectX::XMFLOAT4X4, kDX12FrameCount> reflex2PrevViewToClipMatrices{};
+	DirectX::XMFLOAT4X4 reflex2LastWorldToViewMatrix{};
+	DirectX::XMFLOAT4X4 reflex2LastViewToClipMatrix{};
+	bool reflex2HasLastMatrices = false;
 	bool d3d12DLSSMenuSuspended = false;
 	bool dlssgMenuResumeReady = true;
 	uint32_t dlssgStableGameplayFrames = 0;
