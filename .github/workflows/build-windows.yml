@@ -20,6 +20,25 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Fetch Streamline headers
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA-RTX/Streamline
+          path: extern/Streamline
+          sparse-checkout: include
+
+      - name: Fetch FidelityFX SDK
+        uses: actions/checkout@v4
+        with:
+          repository: GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+          path: extern/FidelityFX-SDK
+          sparse-checkout: |
+            Kits/FidelityFX/api
+            Kits/FidelityFX/backend/dx12
+            Kits/FidelityFX/upscalers
+            Kits/FidelityFX/framegeneration
+            Kits/FidelityFX/signedbin
+
       - name: Configure MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
