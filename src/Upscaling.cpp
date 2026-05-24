@@ -634,6 +634,7 @@ void Upscaling::LoadSettings()
 	settings.dynamicMFGEnabled = static_cast<uint>(ini.GetLongValue("Settings", "bDynamicMFGEnabled", 0));
 	settings.dynamicMFGTargetFPS = static_cast<uint>(ini.GetLongValue("Settings", "iDynamicMFGTargetFPS", 300));
 	settings.reflexMode = static_cast<uint>(ini.GetLongValue("Settings", "iReflexMode", 1));
+	settings.dlssModelPreset = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iDLSSModelPreset", 0), 0, 4));
 	const auto legacySharpness = ini.GetDoubleValue("Settings", "fRCASSharpness", 0.2);
 	settings.sharpness = std::clamp(static_cast<float>(ini.GetDoubleValue("Settings", "fSharpness", legacySharpness)), 0.0f, 1.0f);
 
@@ -2005,7 +2006,7 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 	auto fsrJitter = jitter;
 	if (upscaleMethod == UpscaleMethod::kDLSS && !useD3D12DLSS) {
 		const auto effectiveQualityMode = GetEffectiveQualityMode(upscaleMethod, settings.qualityMode);
-		Streamline::GetSingleton()->Upscale(upscalingTexture.get(), dlssOutputTexture.get(), dilatedMotionVectorTexture.get(), jitter, renderSize, displaySize, effectiveQualityMode, settings.sharpness);
+		Streamline::GetSingleton()->Upscale(upscalingTexture.get(), dlssOutputTexture.get(), dilatedMotionVectorTexture.get(), jitter, renderSize, displaySize, effectiveQualityMode, settings.sharpness, settings.dlssModelPreset);
 		context->CopyResource(frameBufferResource, dlssOutputTexture->resource.get());
 	}
 	else if (upscaleMethod == UpscaleMethod::kFSR && useD3D12FSR) {
@@ -2537,6 +2538,7 @@ bool Upscaling::EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint
 		dlssD3D12DepthFormats[a_frameIndex],
 		GetEffectiveQualityMode(UpscaleMethod::kDLSS, settings.qualityMode),
 		settings.sharpness,
+		settings.dlssModelPreset,
 		&dlssD3D12Sharpened[a_frameIndex]);
 
 	dlssD3D12InputsReady[a_frameIndex] = false;

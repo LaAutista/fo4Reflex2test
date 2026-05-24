@@ -51,6 +51,39 @@ namespace
 		return a_resource ? static_cast<uint32_t>(a_resource->GetDesc().Format) : 0;
 	}
 
+	void ApplyDLSSModelPreset(sl::DLSSOptions& a_options, uint a_preset)
+	{
+		switch (a_preset) {
+		case 1:
+			a_options.dlaaPreset = sl::DLSSPreset::eDefault;
+			a_options.qualityPreset = sl::DLSSPreset::eDefault;
+			a_options.balancedPreset = sl::DLSSPreset::eDefault;
+			a_options.performancePreset = sl::DLSSPreset::eDefault;
+			a_options.ultraPerformancePreset = sl::DLSSPreset::eDefault;
+			break;
+		case 2:
+			a_options.dlaaPreset = a_options.qualityPreset = a_options.balancedPreset =
+				a_options.performancePreset = a_options.ultraPerformancePreset = sl::DLSSPreset::ePresetK;
+			break;
+		case 3:
+			a_options.dlaaPreset = a_options.qualityPreset = a_options.balancedPreset =
+				a_options.performancePreset = a_options.ultraPerformancePreset = sl::DLSSPreset::ePresetM;
+			break;
+		case 4:
+			a_options.dlaaPreset = a_options.qualityPreset = a_options.balancedPreset =
+				a_options.performancePreset = a_options.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+			break;
+		case 0:
+		default:
+			a_options.dlaaPreset = sl::DLSSPreset::ePresetK;
+			a_options.qualityPreset = sl::DLSSPreset::ePresetK;
+			a_options.balancedPreset = sl::DLSSPreset::ePresetK;
+			a_options.performancePreset = sl::DLSSPreset::ePresetM;
+			a_options.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+			break;
+		}
+	}
+
 	std::string DLSSGStatusFlags(sl::DLSSGStatus a_status)
 	{
 		if (a_status == sl::DLSSGStatus::eOk) {
@@ -866,7 +899,7 @@ bool Streamline::ApplyNISSharpenD3D12(ID3D12Resource* a_inputColor, ID3D12Resour
 	return true;
 }
 
-void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture, Texture2D* a_dilatedMotionVectorTexture, float2 a_jitter, float2 a_renderSize, float2 a_displaySize, uint a_qualityMode, float a_sharpness)
+void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture, Texture2D* a_dilatedMotionVectorTexture, float2 a_jitter, float2 a_renderSize, float2 a_displaySize, uint a_qualityMode, float a_sharpness, uint a_dlssModelPreset)
 {
 	UpdateConstants(a_jitter);
 
@@ -901,6 +934,7 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture
 		dlssOptions.outputWidth = static_cast<uint32_t>(a_displaySize.x);
 		dlssOptions.outputHeight = static_cast<uint32_t>(a_displaySize.y);
 		dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
+		ApplyDLSSModelPreset(dlssOptions, a_dlssModelPreset);
 
 		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 			logger::critical("[Streamline] Could not enable DLSS");
@@ -959,7 +993,7 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture
 	}
 }
 
-bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12Resource* a_transparencyMask, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, bool* a_sharpened)
+bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputColor, ID3D12Resource* a_sharpenedOutput, ID3D12Resource* a_motionVectors, ID3D12Resource* a_depth, ID3D12Resource* a_transparencyMask, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, uint a_qualityMode, float a_sharpness, uint a_dlssModelPreset, bool* a_sharpened)
 {
 	std::ignore = a_colorFormat;
 	std::ignore = a_motionVectorFormat;
@@ -996,6 +1030,7 @@ bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputC
 	dlssOptions.outputWidth = static_cast<uint32_t>(a_displaySize.x);
 	dlssOptions.outputHeight = static_cast<uint32_t>(a_displaySize.y);
 	dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
+	ApplyDLSSModelPreset(dlssOptions, a_dlssModelPreset);
 
 	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 		logger::warn("[Streamline] Could not set D3D12 DLSS options: {}", magic_enum::enum_name(result));
