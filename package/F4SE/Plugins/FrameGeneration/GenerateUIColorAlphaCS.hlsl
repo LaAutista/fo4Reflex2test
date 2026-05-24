@@ -1,30 +1,24 @@
 Texture2D<float4> InputTexturePreAlpha : register(t0);
 Texture2D<float4> InputTextureAfterAlpha : register(t1);
-Texture2D<float2> InputMotionVectors : register(t2);
-Texture2D<float> InputDepth : register(t3);
 
-RWTexture2D<float2> OutputMotionVectors : register(u0);
-RWTexture2D<float> OutputDepth : register(u1);
+RWTexture2D<float4> OutputUIColorAlpha : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	uint width;
 	uint height;
-	OutputMotionVectors.GetDimensions(width, height);
+	OutputUIColorAlpha.GetDimensions(width, height);
 	if (DTid.x >= width || DTid.y >= height) {
 		return;
 	}
 
 	const float4 colorPre = InputTexturePreAlpha[DTid.xy];
 	const float4 colorPost = InputTextureAfterAlpha[DTid.xy];
-	float depth = InputDepth[DTid.xy];
-
 	const float4 delta = abs(colorPost - colorPre);
 	const float rgbDelta = max(delta.r, max(delta.g, delta.b));
 	const float lumaDelta = dot(delta.rgb, float3(0.2126, 0.7152, 0.0722));
-	float mask = 1.0 - saturate(max(max(rgbDelta * 8.0, lumaDelta * 16.0), delta.a * 1000.0));
+	const float alpha = saturate(max(max(rgbDelta * 8.0, lumaDelta * 16.0), delta.a * 1000.0));
 
-	OutputMotionVectors[DTid.xy] = lerp(0.0, InputMotionVectors[DTid.xy], mask);
-	OutputDepth[DTid.xy] = lerp(min(depth, 0.1), depth, mask);
+	OutputUIColorAlpha[DTid.xy] = float4(colorPost.rgb, alpha);
 }

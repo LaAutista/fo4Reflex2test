@@ -321,6 +321,7 @@ public:
 	ID3D11ComputeShader* GetOverrideDepthCS();
 	ID3D11ComputeShader* GetCopyDepthToFrameGenerationCS();
 	ID3D11ComputeShader* GetGenerateFrameGenerationBuffersCS();
+	ID3D11ComputeShader* GetGenerateFrameGenerationUIColorAlphaCS();
 	ID3D11ComputeShader* GetGenerateDLSSTransparencyMaskCS();
 
 	/**
@@ -444,6 +445,7 @@ private:
 	winrt::com_ptr<ID3D11ComputeShader> overrideDepthCS;             ///< Depth copy shader
 	winrt::com_ptr<ID3D11ComputeShader> copyDepthToFrameGenerationCS;  ///< Depth copy shader for frame generation inputs
 	winrt::com_ptr<ID3D11ComputeShader> generateFrameGenerationBuffersCS;  ///< Motion/depth reticle fix shader for frame generation inputs
+	winrt::com_ptr<ID3D11ComputeShader> generateFrameGenerationUIColorAlphaCS;  ///< Reticle UI color/alpha extraction shader for frame generation
 	winrt::com_ptr<ID3D11ComputeShader> generateDLSSTransparencyMaskCS;  ///< DLSS transparency/history rejection mask
 	winrt::com_ptr<ID3D11PixelShader> BSImagespaceShaderSSLRRaytracing;  ///< Custom SSR shader
 
