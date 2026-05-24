@@ -86,6 +86,7 @@ public:
 		uint reflexMode = 1;                                        ///< Reflex mode: 0=Off, 1=On, 2=On + Boost
 		uint dlssModelPreset = 0;                                   ///< DLSS model preset: 0=Recommended, 1=Default, 2=K, 3=M, 4=L
 		uint osdEnabled = 0;                                        ///< Debug OSD: 0=Off, 1=On
+		uint taggedTextureDebug = 0;                                ///< Debug tagged texture view: 0=Off, 1=On
 		float sharpness = 0.2f;                                       ///< Upscaler sharpness: 0.0=off, 1.0=max
 	};
 
@@ -155,6 +156,7 @@ public:
 	bool EvaluateD3D12FSR(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	bool EvaluateFSRFrameGeneration(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
 	void TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_t a_frameIndex);
+	void GetTaggedTextureDebugResources(uint32_t a_frameIndex, ID3D12Resource*& a_color, ID3D12Resource*& a_depth, ID3D12Resource*& a_motionVectors) const;
 
 	/**
 	 * @brief Check and manage upscaling resources
@@ -384,6 +386,7 @@ public:
 	std::array<std::unique_ptr<Texture2D>, 2> fsrDepthSharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> fsrOpaqueOnlySharedTextures;
 	std::array<std::unique_ptr<Texture2D>, 2> fsrReactiveMaskSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, 2> debugMotionVectorSharedTextures;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssInputD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssSharpenedD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgHUDLessD3D12;
@@ -397,6 +400,7 @@ public:
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrDepthD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrOpaqueOnlyD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrReactiveMaskD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, 2> debugMotionVectorD3D12;
 	std::array<bool, 2> dlssgInputsReady{};
 	std::array<bool, 2> fsrFrameGenerationInputsReady{};
 	std::array<bool, 2> fsrD3D12InputsReady{};

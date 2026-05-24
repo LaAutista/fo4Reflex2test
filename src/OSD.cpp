@@ -620,3 +620,18 @@ void OSD::Render(
 	UpdateTexture(a_commandList);
 	Draw(a_commandList, a_backBuffer, a_backBufferIndex);
 }
+
+void OSD::Reset()
+{
+	lastFrameTime = {};
+	sampleStart = {};
+	frameTimeAccumMs = 0.0;
+	renderedFrames = 0;
+	generatedFrames = 0;
+	renderFPS = 0.0;
+	frameTimeMs = 0.0;
+	generatedFPS = 0.0;
+	reflexLatencyMs = 0.0f;
+	cachedText.clear();
+	textureDirty = true;
+}

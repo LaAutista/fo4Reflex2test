@@ -635,7 +635,8 @@ void Upscaling::LoadSettings()
 	settings.dynamicMFGTargetFPS = static_cast<uint>(ini.GetLongValue("Settings", "iDynamicMFGTargetFPS", 300));
 	settings.reflexMode = static_cast<uint>(ini.GetLongValue("Settings", "iReflexMode", 1));
 	settings.dlssModelPreset = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iDLSSModelPreset", 0), 0, 4));
-	settings.osdEnabled = static_cast<uint>(ini.GetLongValue("Settings", "bOnScreenDisplay", 0) != 0);
+	settings.osdEnabled = static_cast<uint>(ini.GetLongValue("Settings", "bOnScreenDisplay", 0) == 1);
+	settings.taggedTextureDebug = static_cast<uint>(ini.GetLongValue("Settings", "bTaggedTextureDebug", 0) == 1);
 	const auto legacySharpness = ini.GetDoubleValue("Settings", "fRCASSharpness", 0.2);
 	settings.sharpness = std::clamp(static_cast<float>(ini.GetDoubleValue("Settings", "fSharpness", legacySharpness)), 0.0f, 1.0f);
 
@@ -2047,6 +2048,15 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 		} else {
 			motionVectorTexture = reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[(uint)Util::RenderTarget::kMotionVectors].texture);
 		}
+		const auto debugFrameIndex = DX12SwapChain::GetSingleton()->GetFrameIndex();
+		if (debugFrameIndex < debugMotionVectorSharedTextures.size() && motionVectorTexture) {
+			D3D11_TEXTURE2D_DESC debugMotionVectorDesc{};
+			motionVectorTexture->GetDesc(&debugMotionVectorDesc);
+			debugMotionVectorDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			debugMotionVectorDesc.MiscFlags = 0;
+			EnsureSharedD3D12Texture(debugMotionVectorDesc, debugMotionVectorSharedTextures[debugFrameIndex], debugMotionVectorD3D12[debugFrameIndex], false);
+			context->CopyResource(debugMotionVectorSharedTextures[debugFrameIndex]->resource.get(), motionVectorTexture);
+		}
 
 		CaptureDLSSGInputs(a_renderTargetIndex, motionVectorTexture, renderSize, displaySize);
 		if (ShouldUseFSRFrameGeneration(true)) {
@@ -2700,6 +2710,33 @@ void Upscaling::TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_
 	dlssgInputsReady[a_frameIndex] = false;
 }
 
+void Upscaling::GetTaggedTextureDebugResources(uint32_t a_frameIndex, ID3D12Resource*& a_color, ID3D12Resource*& a_depth, ID3D12Resource*& a_motionVectors) const
+{
+	a_color = nullptr;
+	a_depth = nullptr;
+	a_motionVectors = nullptr;
+
+	if (a_frameIndex >= dlssInputD3D12.size()) {
+		return;
+	}
+
+	if (upscaleMethod == UpscaleMethod::kDLSS) {
+		a_color = dlssInputD3D12[a_frameIndex].get();
+		if (!a_color) {
+			a_color = dlssgHUDLessD3D12[a_frameIndex].get();
+		}
+		a_depth = dlssgDepthD3D12[a_frameIndex].get();
+		a_motionVectors = dlssgMotionVectorD3D12[a_frameIndex].get();
+		if (!a_motionVectors) {
+			a_motionVectors = debugMotionVectorD3D12[a_frameIndex].get();
+		}
+	} else if (upscaleMethod == UpscaleMethod::kFSR) {
+		a_color = fsrInputD3D12[a_frameIndex].get();
+		a_depth = fsrDepthD3D12[a_frameIndex].get();
+		a_motionVectors = fsrMotionVectorD3D12[a_frameIndex].get();
+	}
+}
+
 void Upscaling::CreateUpscalingResources()
 {
 	D3D11_TEXTURE2D_DESC texDesc{};
@@ -2776,6 +2813,7 @@ void Upscaling::DestroyUpscalingResources()
 		dlssgDepthSharedTextures[i] = nullptr;
 		dlssgUIColorAlphaSharedTextures[i] = nullptr;
 		dlssTransparencyMaskSharedTextures[i] = nullptr;
+		debugMotionVectorSharedTextures[i] = nullptr;
 		fsrInputSharedTextures[i] = nullptr;
 		fsrOutputSharedTextures[i] = nullptr;
 		fsrMotionVectorSharedTextures[i] = nullptr;
@@ -2787,6 +2825,7 @@ void Upscaling::DestroyUpscalingResources()
 		dlssgDepthD3D12[i] = nullptr;
 		dlssgUIColorAlphaD3D12[i] = nullptr;
 		dlssTransparencyMaskD3D12[i] = nullptr;
+		debugMotionVectorD3D12[i] = nullptr;
 		fsrInputD3D12[i] = nullptr;
 		fsrOutputD3D12[i] = nullptr;
 		fsrMotionVectorD3D12[i] = nullptr;

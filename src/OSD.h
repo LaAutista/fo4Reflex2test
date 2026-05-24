@@ -26,6 +26,7 @@ public:
 		DXGI_FORMAT a_backBufferFormat,
 		uint32_t a_width,
 		uint32_t a_height);
+	void Reset();
 
 private:
 	struct Vertex

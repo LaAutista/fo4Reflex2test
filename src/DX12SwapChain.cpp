@@ -6,6 +6,7 @@
 #include "FidelityFX.h"
 #include "OSD.h"
 #include "Streamline.h"
+#include "TaggedTextureDebug.h"
 #include "Upscaling.h"
 
 extern bool enbLoaded;
@@ -562,21 +563,63 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 			desc.Format);
 	}
 
-	const auto osdEnabled = Upscaling::GetSingleton()->settings.osdEnabled != 0;
-	if (osdEnabled) {
+	auto upscaling = Upscaling::GetSingleton();
+	const auto osdEnabled = upscaling->settings.osdEnabled != 0;
+	const auto taggedTextureDebug = upscaling->settings.taggedTextureDebug != 0;
+	static bool wasOSDEnabled = false;
+	if (!osdEnabled && wasOSDEnabled) {
+		OSD::GetSingleton()->Reset();
+	}
+	wasOSDEnabled = osdEnabled;
+	if (osdEnabled || taggedTextureDebug) {
 		D3D12_RESOURCE_BARRIER beforeOSD[] = {
 			CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
 			CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET)
 		};
 		commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeOSD)), beforeOSD);
-		OSD::GetSingleton()->Render(
-			d3d12Device.get(),
-			commandLists[frameIndex].get(),
-			destination,
-			frameIndex,
-			swapChainDesc.Format,
-			swapChainDesc.Width,
-			swapChainDesc.Height);
+		if (taggedTextureDebug) {
+			ID3D12Resource* color = nullptr;
+			ID3D12Resource* depth = nullptr;
+			ID3D12Resource* motionVectors = nullptr;
+			upscaling->GetTaggedTextureDebugResources(frameIndex, color, depth, motionVectors);
+			if (color && depth && motionVectors) {
+				D3D12_RESOURCE_BARRIER beforeDebug[] = {
+					CD3DX12_RESOURCE_BARRIER::Transition(color, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+					CD3DX12_RESOURCE_BARRIER::Transition(depth, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+					CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+					CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+				};
+				commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeDebug)), beforeDebug);
+				TaggedTextureDebug::GetSingleton()->Render(
+					d3d12Device.get(),
+					commandLists[frameIndex].get(),
+					destination,
+					color,
+					depth,
+					motionVectors,
+					source,
+					swapChainDesc.Format,
+					swapChainDesc.Width,
+					swapChainDesc.Height);
+				D3D12_RESOURCE_BARRIER afterDebug[] = {
+					CD3DX12_RESOURCE_BARRIER::Transition(color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+					CD3DX12_RESOURCE_BARRIER::Transition(depth, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+					CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
+					CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON)
+				};
+				commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(afterDebug)), afterDebug);
+			}
+		}
+		if (osdEnabled) {
+			OSD::GetSingleton()->Render(
+				d3d12Device.get(),
+				commandLists[frameIndex].get(),
+				destination,
+				frameIndex,
+				swapChainDesc.Format,
+				swapChainDesc.Width,
+				swapChainDesc.Height);
+		}
 		auto afterOSD = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		commandLists[frameIndex]->ResourceBarrier(1, &afterOSD);
 	} else {

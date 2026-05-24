@@ -149,6 +149,15 @@
 			}
 		},
 		{
+			"id": "bTaggedTextureDebug:Settings",
+			"text": "Tagged textures",
+			"type": "switcher",
+			"help": "Shows the current DX12 upscaler inputs as a 2x2 debug view: original color, depth, motion vectors, and final image. (Default: Disabled)",
+			"valueOptions": {
+				"sourceType": "ModSettingInt"
+			}
+		},
+		{
 			"text": "DYNAMIC MULTI FRAME GENERATION",
 			"type": "section"
 		},
