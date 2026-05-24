@@ -167,8 +167,10 @@ public:
 	 */
 	void UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGenerate, bool a_dynamicMFGEnabled, uint a_dynamicMFGTargetFPS, float2 a_renderSize, float2 a_displaySize, DXGI_FORMAT a_colorFormat, DXGI_FORMAT a_motionVectorFormat, DXGI_FORMAT a_depthFormat, DXGI_FORMAT a_uiFormat = DXGI_FORMAT_UNKNOWN);
 	void RequestDLSSGDisable();
+	bool HasPendingDLSSGDisable() const { return pendingDLSSGDisable; }
 	void ApplyPendingDLSSGDisable();
 	bool NeedsDLSSGPresentSafety() const;
+	bool NeedsPresentMarkers() const { return featurePCL && slPCLSetMarker && currentReflexUseMarkersToOptimize; }
 	void OnDLSSGPresentComplete();
 	uint32_t GetCurrentFrameTokenIndex() const { return currentFrameTokenIndex; }
 	sl::FrameToken* GetFrameTokenForFrame(uint32_t a_frameIndex);
@@ -190,7 +192,7 @@ public:
 	void QueryDLSSGState(std::string_view a_phase);
 	sl::ReflexMode GetCurrentReflexMode() const { return currentReflexMode; }
 	float GetReflexLatencyMs();
-	uint32_t ConsumeOSDGeneratedFrames();
+	uint32_t GetOSDGeneratedFramesPerRenderFrame() const { return dlssgActive ? (currentDLSSGGeneratedFrames != 0 ? currentDLSSGGeneratedFrames : 1) : 0; }
 	uint GetCurrentDLSSQualityMode() const { return currentDLSSQualityMode; }
 	uint GetCurrentDLSSModelPreset() const { return currentDLSSModelPreset; }
 	uint32_t GetPCLStatsWindowMessage() const { return pclStatsWindowMessage; }
@@ -220,7 +222,6 @@ public:
 	bool featurePCL = false; ///< True if PCL markers are available
 	bool featureImGUI = false; ///< True if Streamline ImGui debug UI is available
 	bool dlssgActive = false; ///< True if DLSS-G options are currently enabled
-	uint32_t lastDLSSGPresentedFramesForOSD = 0;
 
 	sl::ViewportHandle viewport{ 0 };  ///< Streamline viewport handle
 	sl::FrameToken* frameToken = nullptr;        ///< Current frame token for Streamline
@@ -288,8 +289,10 @@ private:
 	uint32_t markerFrameIndex = std::numeric_limits<uint32_t>::max();
 	uint32_t lastDLSSGStatus = std::numeric_limits<uint32_t>::max();
 	uint32_t lastDLSSGPresentedFrames = std::numeric_limits<uint32_t>::max();
+	uint32_t lastDLSSGStateQueryFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t maxFramesToGenerate = 1;
 	bool dynamicMFGSupported = false;
+	bool dlssgStateKnown = false;
 	bool loggedDynamicMFGUnsupported = false;
 	uint32_t currentFrameTokenIndex = std::numeric_limits<uint32_t>::max();
 	sl::FrameToken* presentFrameToken = nullptr;
@@ -303,7 +306,6 @@ private:
 	uint32_t currentDLSSGDynamicTargetFPS = 0;
 	uint currentDLSSQualityMode = 1;
 	uint currentDLSSModelPreset = 0;
-	uint32_t osdGeneratedFrames = 0;
 	uint32_t pclStatsWindowMessage = 0;
 	uint32_t pclPingCount = 0;
 	bool pclLatencyReportAvailable = false;

@@ -9,6 +9,8 @@
 #include <dxgi1_6.h>
 #include <winrt/base.h>
 
+#include "FrameCount.h"
+
 class OSD
 {
 public:
@@ -56,10 +58,10 @@ private:
 	uint32_t currentWidth = 0;
 	uint32_t currentHeight = 0;
 	uint32_t textureWidth = 512;
-	uint32_t textureHeight = 256;
+	uint32_t textureHeight = 320;
 	uint32_t uploadRowPitch = 0;
 	uint64_t uploadSize = 0;
-	std::array<ID3D12Resource*, 2> rtvBackBuffers{};
+	std::array<ID3D12Resource*, kDX12FrameCount> rtvBackBuffers{};
 
 	std::chrono::steady_clock::time_point lastFrameTime{};
 	std::chrono::steady_clock::time_point sampleStart{};

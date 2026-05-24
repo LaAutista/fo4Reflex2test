@@ -7,6 +7,7 @@
 #include <dxgi1_6.h>
 
 #include "Buffer.h"
+#include "FrameCount.h"
 
 class Streamline;
 
@@ -22,6 +23,7 @@ public:
 struct DXGISwapChainProxy final : IDXGISwapChain4
 {
 	explicit DXGISwapChainProxy(IDXGISwapChain4* a_swapChain);
+	void SetSwapChain(IDXGISwapChain4* a_swapChain);
 
 	ULONG STDMETHODCALLTYPE AddRef() override;
 	ULONG STDMETHODCALLTYPE Release() override;
@@ -98,9 +100,19 @@ public:
 	ID3D12Device* GetD3D12Device() const { return d3d12Device.get(); }
 
 	HRESULT Present(UINT SyncInterval, UINT Flags);
+	struct D3D12EvaluationResult
+	{
+		bool dlss = false;
+		bool fsr = false;
+		bool fsrFrameGeneration = false;
+
+		bool Any() const { return dlss || fsr || fsrFrameGeneration; }
+	};
+	D3D12EvaluationResult EvaluateD3D12WorkForCurrentFrame(bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration);
 	bool EvaluateD3D12DLSSForCurrentFrame();
 	bool EvaluateD3D12FSRForCurrentFrame();
 	bool EvaluateFSRFrameGenerationForCurrentFrame();
+	bool EnsureFidelityFXFrameGenerationSwapChain();
 	HRESULT GetBuffer(UINT a_buffer, REFIID a_riid, void** a_surface);
 	HRESULT GetDevice(REFIID a_riid, void** a_device);
 	void InstallWndProcHook(HWND a_hwnd);
@@ -108,12 +120,23 @@ public:
 
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
-	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
-	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
 	winrt::com_ptr<IDXGISwapChain4> swapChain;
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 
 private:
+	struct CommandContext
+	{
+		winrt::com_ptr<ID3D12CommandAllocator> allocator;
+		winrt::com_ptr<ID3D12GraphicsCommandList4> list;
+		UINT64 fenceValue = 0;
+	};
+
+	static constexpr std::uint32_t kCommandContextCount = kDX12FrameCount * 4;
+
+	CommandContext& AcquireCommandContext();
+	void ExecuteCommandContext(CommandContext& a_context);
+	D3D12EvaluationResult EvaluateD3D12WorkOnCommandList(ID3D12GraphicsCommandList* a_commandList, UINT a_frameIndex, bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration);
+	void WaitForCommandFence(UINT64 a_value);
 	void RefreshBackBuffers();
 
 	winrt::com_ptr<ID3D12Device> proxyD3D12Device;
@@ -122,16 +145,18 @@ private:
 	winrt::com_ptr<ID3D11Fence> d3d11Fence;
 	winrt::com_ptr<ID3D12Fence> d3d12Fence;
 	winrt::com_ptr<ID3D12Fence> commandFence;
-	winrt::com_ptr<ID3D12Resource> swapChainBuffers[2];
+	winrt::com_ptr<ID3D12Resource> swapChainBuffers[kDX12FrameCount];
 	std::unique_ptr<Texture2D> swapChainBufferProxy;
 	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferProxyENB;
-	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferWrapped[2];
+	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferWrapped[kDX12FrameCount];
+	CommandContext commandContexts[kCommandContextCount];
+	winrt::handle commandFenceEvent;
 	DXGISwapChainProxy* swapChainProxy = nullptr;
 	UINT frameIndex = 0;
+	UINT nextCommandContext = 0;
 	UINT64 fenceValue = 1;
 	UINT64 commandFenceValue = 1;
-	UINT64 commandAllocatorFenceValues[2]{};
-	bool useFrameLatencyWaitable = false;
+	bool fidelityFXFrameGenerationSwapChainAllowed = false;
 	double desktopRefreshHz = 0.0;
 	HWND hwnd = nullptr;
 	WNDPROC originalWndProc = nullptr;

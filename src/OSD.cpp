@@ -12,7 +12,7 @@
 namespace
 {
 	constexpr uint32_t kTextureWidth = 512;
-	constexpr uint32_t kTextureHeight = 256;
+	constexpr uint32_t kTextureHeight = 320;
 	constexpr auto kSampleInterval = std::chrono::milliseconds(500);
 
 	const char* QualityName(uint a_qualityMode)
@@ -305,7 +305,7 @@ float4 PSMain(PSInput input) : SV_TARGET
 		ThrowIfFailed(a_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(srvHeap.put())));
 
 		D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-		rtvHeapDesc.NumDescriptors = 2;
+		rtvHeapDesc.NumDescriptors = kDX12FrameCount;
 		rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 		ThrowIfFailed(a_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(rtvHeap.put())));
 
@@ -425,9 +425,9 @@ void OSD::UpdateStats()
 
 	auto streamline = Streamline::GetSingleton();
 	if (streamline->dlssgActive) {
-		generatedFrames += streamline->ConsumeOSDGeneratedFrames();
+		generatedFrames += streamline->GetOSDGeneratedFramesPerRenderFrame();
 	} else if (Upscaling::GetSingleton()->ShouldUseFSRFrameGeneration(true)) {
-		generatedFrames += 2;
+		generatedFrames += 1;
 	}
 
 	if (sampleStart.time_since_epoch().count() == 0) {
@@ -445,7 +445,7 @@ void OSD::UpdateStats()
 	const auto elapsedSeconds = std::chrono::duration<double>(elapsed).count();
 	renderFPS = renderedFrames / elapsedSeconds;
 	frameTimeMs = renderedFrames > 0 ? frameTimeAccumMs / renderedFrames : 0.0;
-	generatedFPS = generatedFrames / elapsedSeconds;
+	generatedFPS = (renderedFrames + generatedFrames) / elapsedSeconds;
 
 	if (adapter) {
 		DXGI_QUERY_VIDEO_MEMORY_INFO memoryInfo{};

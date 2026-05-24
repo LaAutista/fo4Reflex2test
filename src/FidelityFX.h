@@ -139,6 +139,7 @@ public:
 		float2 a_displaySize,
 		DXGI_FORMAT a_backBufferFormat);
 	bool IsFrameGenerationSwapChainActive() const { return frameGenSwapChainContext != nullptr; }
+	bool IsFrameGenerationEnabled() const { return frameGenerationEnabled; }
 
 	// ========================================
 	// Resources
@@ -161,4 +162,6 @@ private:
 	bool contextConsumesReactiveMask = true;
 	float2 frameGenDisplaySize = { 0.0f, 0.0f };
 	DXGI_FORMAT frameGenBackBufferFormat = DXGI_FORMAT_UNKNOWN;
+	bool frameGenerationConfigured = false;
+	bool frameGenerationEnabled = false;
 };

@@ -1,7 +1,7 @@
 #include "DX12SwapChain.h"
 
 #include <algorithm>
-#include <chrono>
+#include <limits>
 
 #include "FidelityFX.h"
 #include "OSD.h"
@@ -103,7 +103,7 @@ namespace
 	DXGI_SWAP_CHAIN_DESC1 MakeSwapChainDescFromWindow(const DXGI_SWAP_CHAIN_DESC& a_swapChainDesc, BOOL a_allowTearing)
 	{
 		DXGI_SWAP_CHAIN_DESC1 desc{};
-		desc.BufferCount = 2;
+		desc.BufferCount = kDX12FrameCount;
 		desc.Width = a_swapChainDesc.BufferDesc.Width;
 		desc.Height = a_swapChainDesc.BufferDesc.Height;
 		desc.Format = a_swapChainDesc.BufferDesc.Format;
@@ -146,6 +146,11 @@ D3D11D3D12SharedTexture::D3D11D3D12SharedTexture(const D3D11_TEXTURE2D_DESC& a_d
 }
 
 DXGISwapChainProxy::DXGISwapChainProxy(IDXGISwapChain4* a_swapChain)
+{
+	swapChain.copy_from(a_swapChain);
+}
+
+void DXGISwapChainProxy::SetSwapChain(IDXGISwapChain4* a_swapChain)
 {
 	swapChain.copy_from(a_swapChain);
 }
@@ -300,10 +305,10 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter, Streamline* a_str
 	LogStreamlineProxy(a_streamline, "deviceForQueue", proxyD3D12Device.get());
 	LogStreamlineProxy(a_streamline, "commandQueue", commandQueue.get());
 
-	for (auto i = 0; i < 2; ++i) {
-		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(commandAllocators[i].put())));
-		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].get(), nullptr, IID_PPV_ARGS(commandLists[i].put())));
-		DX::ThrowIfFailed(commandLists[i]->Close());
+	for (auto& context : commandContexts) {
+		DX::ThrowIfFailed(d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(context.allocator.put())));
+		DX::ThrowIfFailed(d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, context.allocator.get(), nullptr, IID_PPV_ARGS(context.list.put())));
+		DX::ThrowIfFailed(context.list->Close());
 	}
 }
 
@@ -314,10 +319,6 @@ void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWA
 	std::ignore = a_dxgiFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing));
 
 	swapChainDesc = MakeSwapChainDescFromWindow(a_swapChainDesc, allowTearing);
-	useFrameLatencyWaitable = false;
-	if (useFrameLatencyWaitable) {
-		swapChainDesc.Flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-	}
 
 	IDXGIFactory5* factoryForSwapChain = a_dxgiFactory;
 	winrt::com_ptr<IDXGIFactory5> upgradedFactory;
@@ -334,30 +335,9 @@ void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWA
 		upgradedFactory.attach(factoryForSwapChain);
 	}
 
-	if (a_useFidelityFXFrameGeneration) {
-		DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
-		fullscreenDesc.RefreshRate = a_swapChainDesc.BufferDesc.RefreshRate;
-		fullscreenDesc.ScanlineOrdering = a_swapChainDesc.BufferDesc.ScanlineOrdering;
-		fullscreenDesc.Scaling = a_swapChainDesc.BufferDesc.Scaling;
-		fullscreenDesc.Windowed = TRUE;
-
-		IDXGISwapChain4* fidelityFXSwapChain = nullptr;
-		if (FidelityFX::GetSingleton()->CreateFrameGenerationSwapChainForHwnd(
-				upgradedFactory.get(),
-				a_swapChainDesc.OutputWindow,
-				&swapChainDesc,
-				&fullscreenDesc,
-				commandQueue.get(),
-				&fidelityFXSwapChain) &&
-			fidelityFXSwapChain) {
-			swapChain.attach(fidelityFXSwapChain);
-			logger::info("[DX12SwapChain] Swapchain created by FidelityFX frame generation");
-		} else {
-			if (fidelityFXSwapChain) {
-				swapChain.attach(fidelityFXSwapChain);
-			}
-			logger::warn("[DX12SwapChain] FidelityFX frame generation swapchain creation failed; using native swapchain");
-		}
+	fidelityFXFrameGenerationSwapChainAllowed = a_useFidelityFXFrameGeneration;
+	if (fidelityFXFrameGenerationSwapChainAllowed) {
+		logger::info("[DX12SwapChain] FidelityFX frame generation swapchain will be created lazily");
 	}
 
 	if (!swapChain) {
@@ -387,10 +367,6 @@ void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWA
 	if (!swapChainIsStreamlineProxy) {
 		logger::warn("[DX12SwapChain] D3D12 swapchain is not a Streamline proxy; DLSS-G Present interception may not run on this swapchain");
 	}
-	if (useFrameLatencyWaitable) {
-		std::ignore = swapChain->SetMaximumFrameLatency(2);
-	}
-
 	RefreshBackBuffers();
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 	swapChainProxy = new DXGISwapChainProxy(swapChain.get());
@@ -404,12 +380,12 @@ void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWA
 	}
 
 	logger::info(
-		"[DX12SwapChain] Created D3D12 Streamline swapchain {}x{} format={} flags={} frameLatencyWaitable={} desktopRefreshHz={:.3f}",
+		"[DX12SwapChain] Created D3D12 Streamline swapchain {}x{} format={} buffers={} flags={} desktopRefreshHz={:.3f}",
 		swapChainDesc.Width,
 		swapChainDesc.Height,
 		static_cast<uint32_t>(swapChainDesc.Format),
+		swapChainDesc.BufferCount,
 		swapChainDesc.Flags,
-		useFrameLatencyWaitable,
 		desktopRefreshHz);
 
 	InstallWndProcHook(hwnd);
@@ -468,19 +444,70 @@ void DX12SwapChain::CreateInterop()
 		swapChainBufferProxy = std::make_unique<Texture2D>(proxyTexture.detach());
 		swapChainBufferProxyENB = nullptr;
 	}
-	swapChainBufferWrapped[0] = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
-	swapChainBufferWrapped[1] = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
+	for (auto& wrappedBuffer : swapChainBufferWrapped) {
+		wrappedBuffer = std::make_unique<D3D11D3D12SharedTexture>(textureDesc, d3d11Device.get(), d3d12Device.get());
+	}
 }
 
-void WaitForCommandAllocator(ID3D12Fence* a_fence, UINT64 a_value)
+DX12SwapChain::CommandContext& DX12SwapChain::AcquireCommandContext()
 {
-	if (!a_fence || a_value == 0 || a_fence->GetCompletedValue() >= a_value) {
+	const auto completedValue = commandFence ? commandFence->GetCompletedValue() : 0;
+	for (UINT i = 0; i < std::size(commandContexts); ++i) {
+		const auto contextIndex = (nextCommandContext + i) % std::size(commandContexts);
+		auto& context = commandContexts[contextIndex];
+		if (context.fenceValue == 0 || completedValue >= context.fenceValue) {
+			nextCommandContext = static_cast<UINT>((contextIndex + 1) % std::size(commandContexts));
+			context.fenceValue = 0;
+			DX::ThrowIfFailed(context.allocator->Reset());
+			DX::ThrowIfFailed(context.list->Reset(context.allocator.get(), nullptr));
+			return context;
+		}
+	}
+
+	UINT waitContextIndex = nextCommandContext;
+	auto waitValue = std::numeric_limits<UINT64>::max();
+	for (UINT i = 0; i < std::size(commandContexts); ++i) {
+		if (const auto value = commandContexts[i].fenceValue; value != 0 && value < waitValue) {
+			waitContextIndex = i;
+			waitValue = value;
+		}
+	}
+
+	WaitForCommandFence(waitValue);
+	nextCommandContext = static_cast<UINT>((waitContextIndex + 1) % std::size(commandContexts));
+	auto& context = commandContexts[waitContextIndex];
+	context.fenceValue = 0;
+	DX::ThrowIfFailed(context.allocator->Reset());
+	DX::ThrowIfFailed(context.list->Reset(context.allocator.get(), nullptr));
+	return context;
+}
+
+void DX12SwapChain::ExecuteCommandContext(CommandContext& a_context)
+{
+	DX::ThrowIfFailed(a_context.list->Close());
+	ID3D12CommandList* lists[] = { a_context.list.get() };
+	commandQueue->ExecuteCommandLists(static_cast<UINT>(std::size(lists)), lists);
+
+	const auto signalValue = commandFenceValue++;
+	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), signalValue));
+	a_context.fenceValue = signalValue;
+}
+
+void DX12SwapChain::WaitForCommandFence(UINT64 a_value)
+{
+	if (!commandFence || a_value == 0 || commandFence->GetCompletedValue() >= a_value) {
 		return;
 	}
 
-	winrt::handle eventHandle(CreateEventW(nullptr, FALSE, FALSE, nullptr));
-	DX::ThrowIfFailed(a_fence->SetEventOnCompletion(a_value, eventHandle.get()));
-	WaitForSingleObjectEx(eventHandle.get(), INFINITE, FALSE);
+	if (!commandFenceEvent) {
+		commandFenceEvent.attach(CreateEventW(nullptr, FALSE, FALSE, nullptr));
+		if (!commandFenceEvent) {
+			DX::ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
+		}
+	}
+
+	DX::ThrowIfFailed(commandFence->SetEventOnCompletion(a_value, commandFenceEvent.get()));
+	WaitForSingleObjectEx(commandFenceEvent.get(), INFINITE, FALSE);
 }
 
 void DX12SwapChain::SetD3D11Device(ID3D11Device* a_d3d11Device)
@@ -516,16 +543,14 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 		return DXGI_ERROR_INVALID_CALL;
 	}
 
-	const auto appPresentStart = std::chrono::steady_clock::now();
-	static std::chrono::steady_clock::time_point lastAppPresentStart{};
-	double appPresentDeltaMs = 0.0;
-	if (lastAppPresentStart.time_since_epoch().count() != 0) {
-		appPresentDeltaMs = std::chrono::duration<double, std::milli>(appPresentStart - lastAppPresentStart).count();
-	}
-	lastAppPresentStart = appPresentStart;
-
 	auto streamline = Streamline::GetSingleton();
-	streamline->ApplyPendingDLSSGDisable();
+	auto upscaling = Upscaling::GetSingleton();
+	const auto osdEnabled = upscaling->settings.osdEnabled != 0;
+	if (streamline->HasPendingDLSSGDisable()) {
+		streamline->ApplyPendingDLSSGDisable();
+	}
+	const auto dlssgPresentSafety = streamline->NeedsDLSSGPresentSafety();
+	const auto emitPresentMarkers = streamline->NeedsPresentMarkers();
 
 	if (swapChainBufferProxyENB) {
 		d3d11Context->CopyResource(swapChainBufferWrapped[frameIndex]->resource11.get(), swapChainBufferProxyENB->resource11.get());
@@ -536,35 +561,37 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
 	++fenceValue;
 
-	WaitForCommandAllocator(commandFence.get(), commandAllocatorFenceValues[frameIndex]);
-	DX::ThrowIfFailed(commandAllocators[frameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr));
+	auto& commandContext = AcquireCommandContext();
+	auto* commandList = commandContext.list.get();
 
-	auto source = swapChainBufferWrapped[frameIndex]->resource12.get();
 	auto destination = swapChainBuffers[frameIndex].get();
+	auto copySource = swapChainBufferWrapped[frameIndex]->resource12.get();
 
 	D3D12_RESOURCE_BARRIER beforeCopy[] = {
-		CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
+		CD3DX12_RESOURCE_BARRIER::Transition(copySource, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
 		CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST)
 	};
-	commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeCopy)), beforeCopy);
-	commandLists[frameIndex]->CopyResource(destination, source);
+	commandList->ResourceBarrier(static_cast<UINT>(std::size(beforeCopy)), beforeCopy);
+	commandList->CopyResource(destination, copySource);
+	auto afterSourceCopy = CD3DX12_RESOURCE_BARRIER::Transition(copySource, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+	commandList->ResourceBarrier(1, &afterSourceCopy);
 
-	Upscaling::GetSingleton()->TagDLSSGInputs(commandLists[frameIndex].get(), frameIndex);
-	if (FidelityFX::GetSingleton()->IsFrameGenerationSwapChainActive() &&
-		!Upscaling::GetSingleton()->ShouldUseFSRFrameGeneration(true)) {
+	if (upscaling->IsFrameGenerationActive() || dlssgPresentSafety) {
+		upscaling->TagDLSSGInputs(commandList, frameIndex);
+	}
+	auto fidelityFX = FidelityFX::GetSingleton();
+	if (fidelityFX->IsFrameGenerationEnabled() &&
+		!upscaling->IsFSRFrameGenerationActive()) {
 		const auto desc = destination->GetDesc();
 		const auto displaySize = float2(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
-		FidelityFX::GetSingleton()->DisableFrameGeneration(
+		fidelityFX->DisableFrameGeneration(
 			d3d12Device.get(),
-			commandLists[frameIndex].get(),
+			commandList,
 			swapChain.get(),
 			displaySize,
 			desc.Format);
 	}
 
-	auto upscaling = Upscaling::GetSingleton();
-	const auto osdEnabled = upscaling->settings.osdEnabled != 0;
 	const auto taggedTextureDebug = upscaling->settings.taggedTextureDebug != 0;
 	static bool wasOSDEnabled = false;
 	if (!osdEnabled && wasOSDEnabled) {
@@ -572,11 +599,8 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	}
 	wasOSDEnabled = osdEnabled;
 	if (osdEnabled || taggedTextureDebug) {
-		D3D12_RESOURCE_BARRIER beforeOSD[] = {
-			CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
-			CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET)
-		};
-		commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeOSD)), beforeOSD);
+		auto beforeOSD = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		commandList->ResourceBarrier(1, &beforeOSD);
 		if (taggedTextureDebug) {
 			ID3D12Resource* color = nullptr;
 			ID3D12Resource* depth = nullptr;
@@ -587,17 +611,17 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 					CD3DX12_RESOURCE_BARRIER::Transition(color, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
 					CD3DX12_RESOURCE_BARRIER::Transition(depth, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
 					CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-					CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+					CD3DX12_RESOURCE_BARRIER::Transition(copySource, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
 				};
-				commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeDebug)), beforeDebug);
+				commandList->ResourceBarrier(static_cast<UINT>(std::size(beforeDebug)), beforeDebug);
 				TaggedTextureDebug::GetSingleton()->Render(
 					d3d12Device.get(),
-					commandLists[frameIndex].get(),
+					commandList,
 					destination,
 					color,
 					depth,
 					motionVectors,
-					source,
+					copySource,
 					swapChainDesc.Format,
 					swapChainDesc.Width,
 					swapChainDesc.Height);
@@ -605,15 +629,15 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 					CD3DX12_RESOURCE_BARRIER::Transition(color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
 					CD3DX12_RESOURCE_BARRIER::Transition(depth, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
 					CD3DX12_RESOURCE_BARRIER::Transition(motionVectors, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
-					CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON)
+					CD3DX12_RESOURCE_BARRIER::Transition(copySource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON)
 				};
-				commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(afterDebug)), afterDebug);
+				commandList->ResourceBarrier(static_cast<UINT>(std::size(afterDebug)), afterDebug);
 			}
 		}
 		if (osdEnabled) {
 			OSD::GetSingleton()->Render(
 				d3d12Device.get(),
-				commandLists[frameIndex].get(),
+				commandList,
 				destination,
 				frameIndex,
 				swapChainDesc.Format,
@@ -621,31 +645,25 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 				swapChainDesc.Height);
 		}
 		auto afterOSD = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-		commandLists[frameIndex]->ResourceBarrier(1, &afterOSD);
+		commandList->ResourceBarrier(1, &afterOSD);
 	} else {
-		D3D12_RESOURCE_BARRIER afterCopy[] = {
-			CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
-			CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)
-		};
-		commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(afterCopy)), afterCopy);
+		auto afterCopy = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+		commandList->ResourceBarrier(1, &afterCopy);
 	}
 
-	DX::ThrowIfFailed(commandLists[frameIndex]->Close());
-	ID3D12CommandList* lists[] = { commandLists[frameIndex].get() };
-	commandQueue->ExecuteCommandLists(static_cast<UINT>(std::size(lists)), lists);
-	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), commandFenceValue));
-	commandAllocatorFenceValues[frameIndex] = commandFenceValue++;
+	ExecuteCommandContext(commandContext);
 
-	const auto fidelityFXFrameGenerationActive = FidelityFX::GetSingleton()->IsFrameGenerationSwapChainActive();
-	const auto dlssgPresentSafety = streamline->NeedsDLSSGPresentSafety();
+	const auto fidelityFXFrameGenerationActive = upscaling->IsFSRFrameGenerationActive();
 	const auto presentSyncInterval = (dlssgPresentSafety || fidelityFXFrameGenerationActive) ? 0u : SyncInterval;
 	const auto presentFlags = dlssgPresentSafety ? (Flags & ~DXGI_PRESENT_ALLOW_TEARING) : Flags;
-	streamline->OnPresentStart();
-	const auto presentStart = std::chrono::steady_clock::now();
+	if (dlssgPresentSafety || emitPresentMarkers) {
+		streamline->OnPresentStart();
+	}
 	const auto result = swapChain->Present(presentSyncInterval, presentFlags);
-	const auto presentEnd = std::chrono::steady_clock::now();
-	streamline->OnPresentEnd(result, false);
-	if (SUCCEEDED(result)) {
+	if (dlssgPresentSafety || emitPresentMarkers) {
+		streamline->OnPresentEnd(result, false);
+	}
+	if (dlssgPresentSafety && SUCCEEDED(result)) {
 		streamline->OnDLSSGPresentComplete();
 	}
 	if (FAILED(result)) {
@@ -679,19 +697,9 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 	const auto nextFrameIndex = swapChain->GetCurrentBackBufferIndex();
 
-	double waitMs = 0.0;
-	if (useFrameLatencyWaitable) {
-		const auto waitable = swapChain->GetFrameLatencyWaitableObject();
-		if (!waitable) {
-			logger::warn("[DX12SwapChain] Frame latency waitable requested but swapchain returned null handle");
-		} else {
-			const auto waitStart = std::chrono::steady_clock::now();
-			WaitForSingleObjectEx(waitable, INFINITE, TRUE);
-			waitMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
-		}
+	if (dlssgPresentSafety || upscaling->IsFrameGenerationActive()) {
+		streamline->QueryDLSSGState("post-wait");
 	}
-
-	streamline->QueryDLSSGState("post-wait");
 
 	static bool loggedPresentAdjustment = false;
 	if (dlssgPresentSafety && !loggedPresentAdjustment && (presentSyncInterval != SyncInterval || presentFlags != Flags)) {
@@ -708,97 +716,130 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	return S_OK;
 }
 
-bool DX12SwapChain::EvaluateD3D12DLSSForCurrentFrame()
+DX12SwapChain::D3D12EvaluationResult DX12SwapChain::EvaluateD3D12WorkForCurrentFrame(bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration)
 {
+	D3D12EvaluationResult result{};
 	if (!IsReady()) {
-		return false;
+		return result;
 	}
 
-	const auto dlssFrameIndex = frameIndex;
+	if (a_evaluateFSRFrameGeneration && !EnsureFidelityFXFrameGenerationSwapChain()) {
+		a_evaluateFSRFrameGeneration = false;
+	}
+
+	if (!a_evaluateDLSS && !a_evaluateFSR && !a_evaluateFSRFrameGeneration) {
+		return result;
+	}
+
+	const auto evaluationFrameIndex = frameIndex;
 	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
 	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
 	++fenceValue;
 
-	WaitForCommandAllocator(commandFence.get(), commandAllocatorFenceValues[dlssFrameIndex]);
-	DX::ThrowIfFailed(commandAllocators[dlssFrameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[dlssFrameIndex]->Reset(commandAllocators[dlssFrameIndex].get(), nullptr));
-	const auto evaluated = Upscaling::GetSingleton()->EvaluateD3D12DLSS(commandLists[dlssFrameIndex].get(), dlssFrameIndex);
-	DX::ThrowIfFailed(commandLists[dlssFrameIndex]->Close());
+	auto& commandContext = AcquireCommandContext();
+	auto* commandList = commandContext.list.get();
 
-	if (!evaluated) {
-		return false;
+	result = EvaluateD3D12WorkOnCommandList(commandList, evaluationFrameIndex, a_evaluateDLSS, a_evaluateFSR, a_evaluateFSRFrameGeneration);
+
+	DX::ThrowIfFailed(commandList->Close());
+
+	if (!result.Any()) {
+		return result;
 	}
 
-	ID3D12CommandList* lists[] = { commandLists[dlssFrameIndex].get() };
+	ID3D12CommandList* lists[] = { commandList };
 	commandQueue->ExecuteCommandLists(static_cast<UINT>(std::size(lists)), lists);
-	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), commandFenceValue));
-	commandAllocatorFenceValues[dlssFrameIndex] = commandFenceValue++;
+	const auto signalValue = commandFenceValue++;
+	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), signalValue));
+	commandContext.fenceValue = signalValue;
+
 	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
 	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
 	++fenceValue;
-	return true;
+	return result;
+}
+
+DX12SwapChain::D3D12EvaluationResult DX12SwapChain::EvaluateD3D12WorkOnCommandList(ID3D12GraphicsCommandList* a_commandList, UINT a_frameIndex, bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration)
+{
+	D3D12EvaluationResult result{};
+	if (!a_commandList) {
+		return result;
+	}
+
+	auto* upscaling = Upscaling::GetSingleton();
+	if (a_evaluateFSR) {
+		result.fsr = upscaling->EvaluateD3D12FSR(a_commandList, a_frameIndex);
+	}
+	if (a_evaluateDLSS) {
+		result.dlss = upscaling->EvaluateD3D12DLSS(a_commandList, a_frameIndex);
+	}
+
+	const bool upscalerRequested = a_evaluateFSR || a_evaluateDLSS;
+	const bool upscalerSucceeded = (!a_evaluateFSR || result.fsr) && (!a_evaluateDLSS || result.dlss);
+	if (a_evaluateFSRFrameGeneration && (!upscalerRequested || upscalerSucceeded)) {
+		result.fsrFrameGeneration = upscaling->EvaluateFSRFrameGeneration(a_commandList, a_frameIndex);
+	}
+
+	return result;
+}
+
+bool DX12SwapChain::EvaluateD3D12DLSSForCurrentFrame()
+{
+	return EvaluateD3D12WorkForCurrentFrame(true, false, false).dlss;
 }
 
 bool DX12SwapChain::EvaluateD3D12FSRForCurrentFrame()
 {
-	if (!IsReady()) {
-		return false;
-	}
-
-	const auto fsrFrameIndex = frameIndex;
-	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-	++fenceValue;
-
-	WaitForCommandAllocator(commandFence.get(), commandAllocatorFenceValues[fsrFrameIndex]);
-	DX::ThrowIfFailed(commandAllocators[fsrFrameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[fsrFrameIndex]->Reset(commandAllocators[fsrFrameIndex].get(), nullptr));
-	const auto evaluated = Upscaling::GetSingleton()->EvaluateD3D12FSR(commandLists[fsrFrameIndex].get(), fsrFrameIndex);
-	DX::ThrowIfFailed(commandLists[fsrFrameIndex]->Close());
-
-	if (!evaluated) {
-		return false;
-	}
-
-	ID3D12CommandList* lists[] = { commandLists[fsrFrameIndex].get() };
-	commandQueue->ExecuteCommandLists(static_cast<UINT>(std::size(lists)), lists);
-	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), commandFenceValue));
-	commandAllocatorFenceValues[fsrFrameIndex] = commandFenceValue++;
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-	++fenceValue;
-	return true;
+	return EvaluateD3D12WorkForCurrentFrame(false, true, false).fsr;
 }
 
 bool DX12SwapChain::EvaluateFSRFrameGenerationForCurrentFrame()
 {
-	if (!IsReady()) {
+	return EvaluateD3D12WorkForCurrentFrame(false, false, true).fsrFrameGeneration;
+}
+
+bool DX12SwapChain::EnsureFidelityFXFrameGenerationSwapChain()
+{
+	if (!IsReady() || !fidelityFXFrameGenerationSwapChainAllowed) {
 		return false;
 	}
 
-	const auto fgFrameIndex = frameIndex;
-	DX::ThrowIfFailed(d3d11Context->Signal(d3d11Fence.get(), fenceValue));
-	DX::ThrowIfFailed(commandQueue->Wait(d3d12Fence.get(), fenceValue));
-	++fenceValue;
+	auto* fidelityFX = FidelityFX::GetSingleton();
+	if (fidelityFX->IsFrameGenerationSwapChainActive()) {
+		return true;
+	}
 
-	WaitForCommandAllocator(commandFence.get(), commandAllocatorFenceValues[fgFrameIndex]);
-	DX::ThrowIfFailed(commandAllocators[fgFrameIndex]->Reset());
-	DX::ThrowIfFailed(commandLists[fgFrameIndex]->Reset(commandAllocators[fgFrameIndex].get(), nullptr));
-	const auto evaluated = Upscaling::GetSingleton()->EvaluateFSRFrameGeneration(commandLists[fgFrameIndex].get(), fgFrameIndex);
-	DX::ThrowIfFailed(commandLists[fgFrameIndex]->Close());
-
-	if (!evaluated) {
+	auto* originalSwapChain = swapChain.get();
+	if (!originalSwapChain) {
 		return false;
 	}
 
-	ID3D12CommandList* lists[] = { commandLists[fgFrameIndex].get() };
-	commandQueue->ExecuteCommandLists(static_cast<UINT>(std::size(lists)), lists);
-	DX::ThrowIfFailed(commandQueue->Signal(commandFence.get(), commandFenceValue));
-	commandAllocatorFenceValues[fgFrameIndex] = commandFenceValue++;
-	DX::ThrowIfFailed(commandQueue->Signal(d3d12Fence.get(), fenceValue));
-	DX::ThrowIfFailed(d3d11Context->Wait(d3d11Fence.get(), fenceValue));
-	++fenceValue;
-	return true;
+	originalSwapChain->AddRef();
+	IDXGISwapChain4* wrappedSwapChain = originalSwapChain;
+	const auto created = fidelityFX->CreateFrameGenerationSwapChain(&wrappedSwapChain, commandQueue.get());
+	if (created && wrappedSwapChain) {
+		if (wrappedSwapChain != originalSwapChain) {
+			winrt::com_ptr<IDXGISwapChain4> wrappedOwner;
+			wrappedOwner.attach(wrappedSwapChain);
+			swapChain = wrappedOwner;
+			if (swapChainProxy) {
+				swapChainProxy->SetSwapChain(swapChain.get());
+			}
+			RefreshBackBuffers();
+			frameIndex = swapChain->GetCurrentBackBufferIndex();
+		}
+
+		originalSwapChain->Release();
+		logger::info("[DX12SwapChain] FidelityFX frame generation swapchain enabled at runtime");
+		return true;
+	}
+
+	if (wrappedSwapChain && wrappedSwapChain != originalSwapChain) {
+		wrappedSwapChain->Release();
+	}
+	originalSwapChain->Release();
+	logger::warn("[DX12SwapChain] FidelityFX frame generation swapchain could not be enabled");
+	return false;
 }
 
 HRESULT DX12SwapChain::GetDevice(REFIID a_riid, void** a_device)
@@ -825,7 +866,7 @@ void DX12SwapChain::RefreshBackBuffers()
 		backBuffer = nullptr;
 	}
 
-	for (auto i = 0; i < 2; ++i) {
+	for (auto i = 0; i < std::size(swapChainBuffers); ++i) {
 		DX::ThrowIfFailed(swapChain->GetBuffer(i, IID_PPV_ARGS(swapChainBuffers[i].put())));
 	}
 }

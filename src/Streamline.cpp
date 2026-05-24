@@ -10,6 +10,7 @@ namespace
 {
 	constexpr wchar_t kPCLStatsPingMessageName[] = L"PC_Latency_Stats_Ping";
 	constexpr auto kInputSampleMarker = static_cast<sl::PCLMarker>(6);
+	constexpr uint32_t kDLSSGStateQueryInterval = 15;
 
 	void StreamlineLogCallback(sl::LogType a_type, const char* a_message)
 	{
@@ -262,8 +263,10 @@ void Streamline::Shutdown()
 	markerFrameIndex = std::numeric_limits<uint32_t>::max();
 	lastDLSSGStatus = std::numeric_limits<uint32_t>::max();
 	lastDLSSGPresentedFrames = std::numeric_limits<uint32_t>::max();
+	lastDLSSGStateQueryFrame = std::numeric_limits<uint32_t>::max();
 	maxFramesToGenerate = 1;
 	dynamicMFGSupported = false;
+	dlssgStateKnown = false;
 	loggedDynamicMFGUnsupported = false;
 	currentFrameTokenIndex = std::numeric_limits<uint32_t>::max();
 	presentFrameToken = nullptr;
@@ -450,6 +453,10 @@ sl::FrameToken* Streamline::GetFrameTokenForFrame(uint32_t a_frameIndex)
 		return nullptr;
 	}
 
+	if (frameToken && (markerFrameIndex == a_frameIndex || currentFrameTokenIndex == a_frameIndex)) {
+		return frameToken;
+	}
+
 	sl::FrameToken* requestedFrameToken = nullptr;
 	if (SL_FAILED(res, slGetNewFrameToken(requestedFrameToken, &a_frameIndex))) {
 		logger::error("[Streamline] Could not get frame token for frame {}: {}", a_frameIndex, magic_enum::enum_name(res));
@@ -543,12 +550,13 @@ void Streamline::UpdateDLSSG(bool a_enabled, uint a_mode, uint a_numFramesToGene
 		return;
 	}
 
-	if (slDLSSGGetState) {
+	if (!dlssgStateKnown && slDLSSGGetState) {
 		sl::DLSSGState state{};
 		if (SL_SUCCEEDED(result, slDLSSGGetState(viewport, state, nullptr))) {
 			maxFramesToGenerate = std::max<uint32_t>(1, state.numFramesToGenerateMax);
 			dynamicMFGSupported = state.bIsDynamicMFGSupported == sl::Boolean::eTrue;
 		}
+		dlssgStateKnown = true;
 	}
 
 	const bool hasSizes = a_renderSize.x > 0.0f && a_renderSize.y > 0.0f && a_displaySize.x > 0.0f && a_displaySize.y > 0.0f;
@@ -843,9 +851,20 @@ void Streamline::OnPresentEnd(HRESULT, bool a_queryState)
 
 void Streamline::QueryDLSSGState(std::string_view a_phase)
 {
+	std::ignore = a_phase;
+
 	if (!featureDLSSG || !slDLSSGGetState) {
 		return;
 	}
+
+	static auto gameViewport = Util::State_GetSingleton();
+	const auto currentFrame = gameViewport ? gameViewport->frameCount : lastDLSSGStateQueryFrame + 1;
+	if (dlssgActive &&
+		lastDLSSGStateQueryFrame != std::numeric_limits<uint32_t>::max() &&
+		currentFrame - lastDLSSGStateQueryFrame < kDLSSGStateQueryInterval) {
+		return;
+	}
+	lastDLSSGStateQueryFrame = currentFrame;
 
 	sl::DLSSGState state{};
 	if (SL_FAILED(result, slDLSSGGetState(viewport, state, nullptr))) {
@@ -855,28 +874,17 @@ void Streamline::QueryDLSSGState(std::string_view a_phase)
 
 	maxFramesToGenerate = std::max<uint32_t>(1, state.numFramesToGenerateMax);
 	dynamicMFGSupported = state.bIsDynamicMFGSupported == sl::Boolean::eTrue;
+	dlssgStateKnown = true;
 
 	const auto status = static_cast<uint32_t>(state.status);
 	if (lastDLSSGStatus != status || lastDLSSGPresentedFrames != state.numFramesActuallyPresented) {
 		lastDLSSGStatus = status;
 		lastDLSSGPresentedFrames = state.numFramesActuallyPresented;
 	}
-	lastDLSSGPresentedFramesForOSD = state.numFramesActuallyPresented;
-	if (dlssgActive && state.numFramesActuallyPresented > 0) {
-		osdGeneratedFrames += state.numFramesActuallyPresented;
-	}
-
 	if (dlssgActive && state.status != sl::DLSSGStatus::eOk && slDLSSGSetOptions) {
 		logger::warn("[Streamline] DLSS-G disable requested due to runtime status {}", status);
 		RequestDLSSGDisable();
 	}
-}
-
-uint32_t Streamline::ConsumeOSDGeneratedFrames()
-{
-	const auto frames = osdGeneratedFrames;
-	osdGeneratedFrames = 0;
-	return frames;
 }
 
 float Streamline::GetReflexLatencyMs()

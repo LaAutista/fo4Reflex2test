@@ -3,11 +3,12 @@
 #include "Util.h"
 #include "Buffer.h"
 #include "FidelityFX.h"
+#include "FrameCount.h"
 #include "Streamline.h"
 
 #include <array>
+#include <initializer_list>
 #include <memory>
-#include <vector>
 #include <winrt/base.h>
 
 const uint renderTargetsPatch[] = { 0, 20, 57, 24, 25, 23, 58, 59, 28, 3, 9, 60, 61, 4, 29, 1, 2, 36, 37, 22, 10, 11, 7, 8, 64, 14, 16 };
@@ -116,6 +117,10 @@ public:
 	bool ShouldBlockTemporalFeatures() const;
 	bool ShouldUseFrameGeneration(bool a_checkMenu);
 	bool ShouldUseFSRFrameGeneration(bool a_checkMenu);
+	bool IsFrameGenerationActive() const { return frameGenerationActive; }
+	bool IsFSRFrameGenerationActive() const { return fsrFrameGenerationActive; }
+	bool WantsFrameGenerationInputsThisFrame() const { return frameGenerationInputsWanted; }
+	bool IsD3D12DLSSActive() const { return d3d12DLSSActive; }
 
 	/**
 	 * @brief Process menu open/close events
@@ -192,7 +197,7 @@ public:
 	 * Temporarily replaces game render targets with lower resolution proxies
 	 * during main rendering pass
 	 */
-	void OverrideRenderTargets(const std::vector<int>& a_indicesToCopy = {});
+	void OverrideRenderTargets(std::initializer_list<int> a_indicesToCopy = {});
 
 	/**
 	 * @brief Restore original render targets
@@ -200,7 +205,7 @@ public:
 	 *
 	 * Restores full resolution render targets after scaled rendering is complete
 	 */
-	void ResetRenderTargets(const std::vector<int>& a_indicesToCopy = {});
+	void ResetRenderTargets(std::initializer_list<int> a_indicesToCopy = {});
 
 	/**
 	 * @brief Update a single render target
@@ -374,54 +379,59 @@ public:
 	std::unique_ptr<Texture2D> dlssOutputTexture;          ///< Full-resolution DLSS output texture
 	std::unique_ptr<Texture2D> dilatedMotionVectorTexture; ///< Dilated motion vectors for DLSS
 	std::unique_ptr<Texture2D> dlssgHUDLessTexture;        ///< Persistent HUD-less color for DLSS-G present-time consumption
-	std::array<std::unique_ptr<Texture2D>, 2> dlssInputSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssSharpenedSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssgHUDLessSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssgMotionVectorSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssgDepthSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssgUIColorAlphaSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> dlssTransparencyMaskSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrInputSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrOutputSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrMotionVectorSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrDepthSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrOpaqueOnlySharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> fsrReactiveMaskSharedTextures;
-	std::array<std::unique_ptr<Texture2D>, 2> debugMotionVectorSharedTextures;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssInputD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssSharpenedD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgHUDLessD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgMotionVectorD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgDepthD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssgUIColorAlphaD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> dlssTransparencyMaskD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrInputD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrOutputD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrMotionVectorD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrDepthD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrOpaqueOnlyD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> fsrReactiveMaskD3D12;
-	std::array<winrt::com_ptr<ID3D12Resource>, 2> debugMotionVectorD3D12;
-	std::array<bool, 2> dlssgInputsReady{};
-	std::array<bool, 2> fsrFrameGenerationInputsReady{};
-	std::array<bool, 2> fsrD3D12InputsReady{};
-	std::array<uint32_t, 2> dlssgInputFrameTokenIndices{};
-	std::array<bool, 2> dlssD3D12InputsReady{};
-	std::array<bool, 2> dlssD3D12Sharpened{};
-	std::array<bool, 2> dlssD3D12TransparencyMaskReady{};
-	std::array<DXGI_FORMAT, 2> dlssD3D12ColorFormats{};
-	std::array<DXGI_FORMAT, 2> dlssD3D12MotionVectorFormats{};
-	std::array<DXGI_FORMAT, 2> dlssD3D12DepthFormats{};
-	std::array<float2, 2> dlssgInputRenderSizes{};
-	std::array<float2, 2> dlssgInputDisplaySizes{};
-	std::array<DXGI_FORMAT, 2> fsrFrameGenerationColorFormats{};
-	std::array<uint64_t, 2> fsrFrameGenerationFrameIDs{};
-	std::array<float2, 2> fsrInputJitters{};
-	std::array<float2, 2> fsrInputRenderSizes{};
-	std::array<float2, 2> fsrInputDisplaySizes{};
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssInputSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssSharpenedSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssgHUDLessSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssgMotionVectorSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssgDepthSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssgUIColorAlphaSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> dlssTransparencyMaskSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrInputSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrOutputSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrMotionVectorSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrDepthSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrOpaqueOnlySharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> fsrReactiveMaskSharedTextures;
+	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> debugMotionVectorSharedTextures;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssInputD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssSharpenedD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgHUDLessD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgMotionVectorD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgDepthD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgUIColorAlphaD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssTransparencyMaskD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrInputD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrOutputD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrMotionVectorD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrDepthD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrOpaqueOnlyD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> fsrReactiveMaskD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> debugMotionVectorD3D12;
+	std::array<bool, kDX12FrameCount> dlssgInputsReady{};
+	std::array<bool, kDX12FrameCount> fsrFrameGenerationInputsReady{};
+	std::array<bool, kDX12FrameCount> fsrD3D12InputsReady{};
+	std::array<uint32_t, kDX12FrameCount> dlssgInputFrameTokenIndices{};
+	std::array<bool, kDX12FrameCount> dlssD3D12InputsReady{};
+	std::array<bool, kDX12FrameCount> dlssD3D12Sharpened{};
+	std::array<bool, kDX12FrameCount> dlssD3D12TransparencyMaskReady{};
+	std::array<DXGI_FORMAT, kDX12FrameCount> dlssD3D12ColorFormats{};
+	std::array<DXGI_FORMAT, kDX12FrameCount> dlssD3D12MotionVectorFormats{};
+	std::array<DXGI_FORMAT, kDX12FrameCount> dlssD3D12DepthFormats{};
+	std::array<float2, kDX12FrameCount> dlssgInputRenderSizes{};
+	std::array<float2, kDX12FrameCount> dlssgInputDisplaySizes{};
+	std::array<DXGI_FORMAT, kDX12FrameCount> fsrFrameGenerationColorFormats{};
+	std::array<uint64_t, kDX12FrameCount> fsrFrameGenerationFrameIDs{};
+	std::array<float2, kDX12FrameCount> fsrInputJitters{};
+	std::array<float2, kDX12FrameCount> fsrInputRenderSizes{};
+	std::array<float2, kDX12FrameCount> fsrInputDisplaySizes{};
 	bool d3d12DLSSMenuSuspended = false;
 	bool dlssgMenuResumeReady = true;
 	uint32_t dlssgStableGameplayFrames = 0;
+	bool temporalFeaturesBlocked = false;
+	bool frameGenerationActive = false;
+	bool fsrFrameGenerationActive = false;
+	bool frameGenerationInputsWanted = false;
+	bool d3d12DLSSActive = false;
 
 	/**
 	 * @struct UpscalingCB
@@ -453,6 +463,8 @@ private:
 	std::unique_ptr<Texture2D> frameGenerationMotionVectorTexture;
 	std::unique_ptr<Texture2D> frameGenerationDepthTexture;
 	std::unique_ptr<Texture2D> dlssTransparencyMaskTexture;
+	bool frameGenerationPreAlphaReady = false;
+	uint32_t frameGenerationPreAlphaFrame = 0;
 	bool frameGenerationBuffersReady = false;
 	uint32_t frameGenerationBuffersFrame = 0;
 	bool dlssTransparencyMaskReady = false;

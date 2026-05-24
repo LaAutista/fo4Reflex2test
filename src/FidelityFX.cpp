@@ -200,6 +200,8 @@ void FidelityFX::DestroyFrameGenerationResources()
 	frameGenDevice = nullptr;
 	frameGenDisplaySize = { 0.0f, 0.0f };
 	frameGenBackBufferFormat = DXGI_FORMAT_UNKNOWN;
+	frameGenerationConfigured = false;
+	frameGenerationEnabled = false;
 }
 
 void FidelityFX::CopyOpaqueTexture()
@@ -458,6 +460,10 @@ bool FidelityFX::ConfigureFrameGeneration(
 		return false;
 	}
 
+	if (!a_enabled && (!frameGenerationConfigured || !frameGenerationEnabled)) {
+		return true;
+	}
+
 	if (!EnsureFrameGenerationContext(a_device, a_displaySize, a_backBufferFormat)) {
 		return false;
 	}
@@ -489,6 +495,9 @@ bool FidelityFX::ConfigureFrameGeneration(
 		logger::warn("[FidelityFX] Configure(frame generation) failed: {}", static_cast<uint32_t>(result));
 		return false;
 	}
+
+	frameGenerationConfigured = true;
+	frameGenerationEnabled = a_enabled;
 
 	ffx::ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 uiConfig{};
 	uiConfig.uiResource = a_uiColorAlpha ? ffxApiGetResourceDX12(a_uiColorAlpha, FFX_API_RESOURCE_STATE_COMPUTE_READ) : ffxApiGetResourceDX12(nullptr, FFX_API_RESOURCE_STATE_COMPUTE_READ);
