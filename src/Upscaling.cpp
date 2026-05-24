@@ -1822,6 +1822,8 @@ void Upscaling::UpdateUpscaling()
 
 	if (upscaleMethod == UpscaleMethod::kDisabled) {
 		jitter = { 0.0f, 0.0f };
+		osdRenderSize = { static_cast<float>(displayWidth), static_cast<float>(displayHeight) };
+		osdNativeSize = osdRenderSize;
 		gameViewport->offsetX = 0.0f;
 		gameViewport->offsetY = 0.0f;
 	}
@@ -1836,6 +1838,8 @@ void Upscaling::UpdateUpscaling()
 		// Convert to NDC (X negated for DirectX)
 		gameViewport->offsetX = 2.0f * -jitter.x / static_cast<float>(renderWidth);
 		gameViewport->offsetY = 2.0f * jitter.y / static_cast<float>(renderHeight);
+		osdRenderSize = { static_cast<float>(renderWidth), static_cast<float>(renderHeight) };
+		osdNativeSize = { static_cast<float>(displayWidth), static_cast<float>(displayHeight) };
 	}
 
 	originalDynamicHeightRatio = resolutionScale;
@@ -1901,6 +1905,8 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 
 	auto displaySize = float2(float(upscaleDesc.Width), float(upscaleDesc.Height));
 	auto renderSize = float2(displaySize.x * originalDynamicWidthRatio, displaySize.y * originalDynamicHeightRatio);
+	osdRenderSize = renderSize;
+	osdNativeSize = displaySize;
 
 	for (auto* rtv : currentRTVs) {
 		if (rtv) {

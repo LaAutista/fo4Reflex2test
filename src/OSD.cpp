@@ -76,6 +76,19 @@ namespace
 		return "Off";
 	}
 
+	const char* UpscalerMethodName(Upscaling::UpscaleMethod a_method)
+	{
+		switch (a_method) {
+		case Upscaling::UpscaleMethod::kDLSS:
+			return "DLSS";
+		case Upscaling::UpscaleMethod::kFSR:
+			return "FSR";
+		case Upscaling::UpscaleMethod::kDisabled:
+		default:
+			return "Off";
+		}
+	}
+
 	void ThrowIfFailed(HRESULT a_result)
 	{
 		if (FAILED(a_result)) {
@@ -466,6 +479,8 @@ std::string OSD::BuildText() const
 	char line[160]{};
 	std::snprintf(line, sizeof(line), "FPS: %.1f  %.2f ms\n", renderFPS, frameTimeMs);
 	text += line;
+	std::snprintf(line, sizeof(line), "Upscaler: %s\n", UpscalerMethodName(activeMethod));
+	text += line;
 	std::snprintf(line, sizeof(line), "FG: %s\n", FGMethodName());
 	text += line;
 	if (upscaling->ShouldUseFrameGeneration(true) || upscaling->ShouldUseFSRFrameGeneration(true)) {
@@ -474,6 +489,8 @@ std::string OSD::BuildText() const
 	}
 
 	if (activeMethod == Upscaling::UpscaleMethod::kDLSS) {
+		std::snprintf(line, sizeof(line), "Res: %.0fx%.0f -> %.0fx%.0f\n", upscaling->osdRenderSize.x, upscaling->osdRenderSize.y, upscaling->osdNativeSize.x, upscaling->osdNativeSize.y);
+		text += line;
 		std::snprintf(line, sizeof(line), "VRAM: %llu MB\n", static_cast<unsigned long long>(vramUsageMB));
 		text += line;
 		std::snprintf(line, sizeof(line), "Reflex: %s\n", ReflexModeName(streamline->GetCurrentReflexMode()));
@@ -493,6 +510,8 @@ std::string OSD::BuildText() const
 		std::snprintf(line, sizeof(line), "DLSS Preset: %s\n", DLSSModelPresetName(streamline->GetCurrentDLSSModelPreset()));
 		text += line;
 	} else if (activeMethod == Upscaling::UpscaleMethod::kFSR) {
+		std::snprintf(line, sizeof(line), "Res: %.0fx%.0f -> %.0fx%.0f\n", upscaling->osdRenderSize.x, upscaling->osdRenderSize.y, upscaling->osdNativeSize.x, upscaling->osdNativeSize.y);
+		text += line;
 		std::snprintf(line, sizeof(line), "FSR Quality: %s\n", QualityName(upscaling->settings.qualityMode));
 		text += line;
 	}

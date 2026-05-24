@@ -165,6 +165,8 @@ public:
 	void CheckResources();
 
 	float2 jitter = { 0, 0 };  ///< Current frame's camera jitter offset
+	float2 osdRenderSize = { 0.0f, 0.0f };
+	float2 osdNativeSize = { 0.0f, 0.0f };
 	UpscaleMethod upscaleMethodNoMenu = UpscaleMethod::kDisabled;
 	UpscaleMethod upscaleMethod = UpscaleMethod::kDisabled;
 
