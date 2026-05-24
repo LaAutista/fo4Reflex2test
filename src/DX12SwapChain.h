@@ -103,6 +103,8 @@ public:
 	bool EvaluateFSRFrameGenerationForCurrentFrame();
 	HRESULT GetBuffer(UINT a_buffer, REFIID a_riid, void** a_surface);
 	HRESULT GetDevice(REFIID a_riid, void** a_device);
+	void InstallWndProcHook(HWND a_hwnd);
+	LRESULT CallOriginalWndProc(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam) const;
 
 	winrt::com_ptr<ID3D12Device> d3d12Device;
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
@@ -131,4 +133,6 @@ private:
 	UINT64 commandAllocatorFenceValues[2]{};
 	bool useFrameLatencyWaitable = false;
 	double desktopRefreshHz = 0.0;
+	HWND hwnd = nullptr;
+	WNDPROC originalWndProc = nullptr;
 };

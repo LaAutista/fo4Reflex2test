@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "FidelityFX.h"
+#include "OSD.h"
 #include "Streamline.h"
 #include "Upscaling.h"
 
@@ -11,6 +12,17 @@ extern bool enbLoaded;
 
 namespace
 {
+	LRESULT CALLBACK DX12SwapChainWndProc(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam)
+	{
+		auto* streamline = Streamline::GetSingleton();
+		if (streamline->GetPCLStatsWindowMessage() != 0 && a_msg == streamline->GetPCLStatsWindowMessage()) {
+			streamline->OnPCLStatsPing();
+		}
+
+		auto* swapChain = DX12SwapChain::GetSingleton();
+		return swapChain->CallOriginalWndProc(a_hwnd, a_msg, a_wParam, a_lParam);
+	}
+
 	double QueryDesktopRefreshHz(IDXGISwapChain* a_swapChain)
 	{
 		if (!a_swapChain) {
@@ -296,6 +308,7 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter, Streamline* a_str
 
 void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWAP_CHAIN_DESC& a_swapChainDesc, Streamline* a_streamline, bool a_useFidelityFXFrameGeneration)
 {
+	hwnd = a_swapChainDesc.OutputWindow;
 	BOOL allowTearing = FALSE;
 	std::ignore = a_dxgiFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing));
 
@@ -397,6 +410,33 @@ void DX12SwapChain::CreateSwapChain(IDXGIFactory5* a_dxgiFactory, const DXGI_SWA
 		swapChainDesc.Flags,
 		useFrameLatencyWaitable,
 		desktopRefreshHz);
+
+	InstallWndProcHook(hwnd);
+}
+
+void DX12SwapChain::InstallWndProcHook(HWND a_hwnd)
+{
+	if (!a_hwnd || originalWndProc) {
+		return;
+	}
+
+	SetLastError(0);
+	const auto previous = SetWindowLongPtrW(a_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(DX12SwapChainWndProc));
+	if (previous == 0 && GetLastError() != 0) {
+		logger::warn("[DX12SwapChain] Could not install PCL stats window proc hook: {}", GetLastError());
+		return;
+	}
+
+	originalWndProc = reinterpret_cast<WNDPROC>(previous);
+	logger::info("[DX12SwapChain] Installed PCL stats window proc hook");
+}
+
+LRESULT DX12SwapChain::CallOriginalWndProc(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam) const
+{
+	if (originalWndProc) {
+		return CallWindowProcW(originalWndProc, a_hwnd, a_msg, a_wParam, a_lParam);
+	}
+	return DefWindowProcW(a_hwnd, a_msg, a_wParam, a_lParam);
 }
 
 void DX12SwapChain::CreateInterop()
@@ -522,11 +562,30 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 			desc.Format);
 	}
 
-	D3D12_RESOURCE_BARRIER afterCopy[] = {
-		CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
-		CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)
-	};
-	commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(afterCopy)), afterCopy);
+	const auto osdEnabled = Upscaling::GetSingleton()->settings.osdEnabled != 0;
+	if (osdEnabled) {
+		D3D12_RESOURCE_BARRIER beforeOSD[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET)
+		};
+		commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(beforeOSD)), beforeOSD);
+		OSD::GetSingleton()->Render(
+			d3d12Device.get(),
+			commandLists[frameIndex].get(),
+			destination,
+			frameIndex,
+			swapChainDesc.Format,
+			swapChainDesc.Width,
+			swapChainDesc.Height);
+		auto afterOSD = CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+		commandLists[frameIndex]->ResourceBarrier(1, &afterOSD);
+	} else {
+		D3D12_RESOURCE_BARRIER afterCopy[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)
+		};
+		commandLists[frameIndex]->ResourceBarrier(static_cast<UINT>(std::size(afterCopy)), afterCopy);
+	}
 
 	DX::ThrowIfFailed(commandLists[frameIndex]->Close());
 	ID3D12CommandList* lists[] = { commandLists[frameIndex].get() };

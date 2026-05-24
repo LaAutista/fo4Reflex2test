@@ -188,6 +188,15 @@ public:
 	void OnPresentStart();
 	void OnPresentEnd(HRESULT a_result, bool a_queryState = true);
 	void QueryDLSSGState(std::string_view a_phase);
+	sl::ReflexMode GetCurrentReflexMode() const { return currentReflexMode; }
+	float GetReflexLatencyMs();
+	uint32_t ConsumeOSDGeneratedFrames();
+	uint GetCurrentDLSSQualityMode() const { return currentDLSSQualityMode; }
+	uint GetCurrentDLSSModelPreset() const { return currentDLSSModelPreset; }
+	uint32_t GetPCLStatsWindowMessage() const { return pclStatsWindowMessage; }
+	void OnPCLStatsPing();
+	uint32_t GetPCLPingCount() const { return pclPingCount; }
+	bool IsPCLLatencyReportAvailable() const { return pclLatencyReportAvailable; }
 
 	/**
 	 * @brief Destroy DLSS resources and disable DLSS
@@ -211,6 +220,7 @@ public:
 	bool featurePCL = false; ///< True if PCL markers are available
 	bool featureImGUI = false; ///< True if Streamline ImGui debug UI is available
 	bool dlssgActive = false; ///< True if DLSS-G options are currently enabled
+	uint32_t lastDLSSGPresentedFramesForOSD = 0;
 
 	sl::ViewportHandle viewport{ 0 };  ///< Streamline viewport handle
 	sl::FrameToken* frameToken = nullptr;        ///< Current frame token for Streamline
@@ -291,6 +301,12 @@ private:
 	sl::DLSSGMode currentDLSSGMode = sl::DLSSGMode::eCount;
 	uint32_t currentDLSSGGeneratedFrames = 0;
 	uint32_t currentDLSSGDynamicTargetFPS = 0;
+	uint currentDLSSQualityMode = 1;
+	uint currentDLSSModelPreset = 0;
+	uint32_t osdGeneratedFrames = 0;
+	uint32_t pclStatsWindowMessage = 0;
+	uint32_t pclPingCount = 0;
+	bool pclLatencyReportAvailable = false;
 	bool pendingDLSSGDisable = false;
 	uint32_t dlssgPresentSafetyFrames = 0;
 };

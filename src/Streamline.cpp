@@ -8,6 +8,9 @@
 
 namespace
 {
+	constexpr wchar_t kPCLStatsPingMessageName[] = L"PC_Latency_Stats_Ping";
+	constexpr auto kInputSampleMarker = static_cast<sl::PCLMarker>(6);
+
 	void StreamlineLogCallback(sl::LogType a_type, const char* a_message)
 	{
 		if (!a_message) {
@@ -383,11 +386,25 @@ void Streamline::PostDevice()
 
 		if (slPCLSetOptions) {
 			sl::PCLOptions options{};
-			options.idThread = GetCurrentThreadId();
+			// Leave idThread unset so PCL posts the stats message to the foreground game
+			// window. Setting it makes Streamline use PostThreadMessageW, bypassing our
+			// WndProc hook.
+			options.idThread = 0;
 			if (SL_FAILED(result, slPCLSetOptions(options))) {
 				logger::warn("[Streamline] Could not set PCL options: {}", magic_enum::enum_name(result));
 			}
 		}
+
+		if (slPCLGetState) {
+			sl::PCLState state{};
+			if (SL_SUCCEEDED(result, slPCLGetState(state))) {
+				pclStatsWindowMessage = state.statsWindowMessage;
+			}
+		}
+		if (pclStatsWindowMessage == 0) {
+			pclStatsWindowMessage = RegisterWindowMessageW(kPCLStatsPingMessageName);
+		}
+		logger::info("[Streamline] PCL stats message id {}", pclStatsWindowMessage);
 	}
 }
 
@@ -411,6 +428,9 @@ bool Streamline::EnsureFrameToken(uint32_t a_frameIndex)
 	constantsFrameIndex = std::numeric_limits<uint32_t>::max();
 
 	SetPCLMarker(sl::PCLMarker::eSimulationStart);
+	// Streamline 2.11.1 removed the typed eInputSample enum value, but Reflex/NVAPI
+	// latency reports still expose inputSampleTime for marker value 6.
+	SetPCLMarker(kInputSampleMarker);
 
 	if (featureReflex && slReflexSleep) {
 		if (SL_FAILED(res, slReflexSleep(*frameToken))) {
@@ -448,13 +468,38 @@ sl::FrameToken* Streamline::GetFrameTokenForFrame(uint32_t a_frameIndex)
 void Streamline::SetPCLMarker(sl::PCLMarker a_marker, sl::FrameToken* a_frameToken)
 {
 	auto markerFrameToken = a_frameToken ? a_frameToken : frameToken;
-	if (!featurePCL || !slPCLSetMarker || !markerFrameToken) {
+	if (!markerFrameToken) {
+		return;
+	}
+
+	if (!featurePCL || !slPCLSetMarker) {
 		return;
 	}
 
 	if (SL_FAILED(res, slPCLSetMarker(a_marker, *markerFrameToken))) {
 		logger::warn("[Streamline] PCL marker {} failed: {}", static_cast<uint32_t>(a_marker), magic_enum::enum_name(res));
 	}
+}
+
+void Streamline::OnPCLStatsPing()
+{
+	if (!featurePCL || !slPCLSetMarker || !slGetNewFrameToken) {
+		return;
+	}
+
+	static auto gameViewport = Util::State_GetSingleton();
+	const auto nextFrameIndex = gameViewport ? gameViewport->frameCount + 1 : markerFrameIndex + 1;
+	sl::FrameToken* pingFrameToken = nullptr;
+	if (SL_FAILED(res, slGetNewFrameToken(pingFrameToken, &nextFrameIndex)) || !pingFrameToken) {
+		logger::warn("[Streamline] Could not get PCL ping frame token {}: {}", nextFrameIndex, magic_enum::enum_name(res));
+		return;
+	}
+
+	if (SL_FAILED(res, slPCLSetMarker(sl::PCLMarker::ePCLatencyPing, *pingFrameToken))) {
+		logger::warn("[Streamline] PCL ping marker failed: {}", magic_enum::enum_name(res));
+		return;
+	}
+	++pclPingCount;
 }
 
 void Streamline::UpdateReflex(uint a_reflexMode, bool a_forceEnabled)
@@ -470,8 +515,8 @@ void Streamline::UpdateReflex(uint a_reflexMode, bool a_forceEnabled)
 		mode = sl::ReflexMode::eLowLatency;
 	}
 
-	const bool useMarkersToOptimize = a_forceEnabled;
-	const uint32_t threadId = GetCurrentThreadId();
+	const bool useMarkersToOptimize = mode != sl::ReflexMode::eOff;
+	const uint32_t threadId = 0;
 	if (currentReflexMode == mode && currentReflexUseMarkersToOptimize == useMarkersToOptimize && currentReflexThreadId == threadId) {
 		return;
 	}
@@ -482,7 +527,7 @@ void Streamline::UpdateReflex(uint a_reflexMode, bool a_forceEnabled)
 	options.idThread = threadId;
 
 	if (SL_FAILED(result, slReflexSetOptions(options))) {
-		logger::warn("[Streamline] Could not set Reflex mode {} markers={} thread={}: {}", static_cast<uint32_t>(mode), useMarkersToOptimize, threadId, magic_enum::enum_name(result));
+		logger::warn("[Streamline] Could not set Reflex mode {} markers={}: {}", static_cast<uint32_t>(mode), useMarkersToOptimize, magic_enum::enum_name(result));
 		return;
 	}
 
@@ -816,11 +861,48 @@ void Streamline::QueryDLSSGState(std::string_view a_phase)
 		lastDLSSGStatus = status;
 		lastDLSSGPresentedFrames = state.numFramesActuallyPresented;
 	}
+	lastDLSSGPresentedFramesForOSD = state.numFramesActuallyPresented;
+	if (dlssgActive && state.numFramesActuallyPresented > 0) {
+		osdGeneratedFrames += state.numFramesActuallyPresented;
+	}
 
 	if (dlssgActive && state.status != sl::DLSSGStatus::eOk && slDLSSGSetOptions) {
 		logger::warn("[Streamline] DLSS-G disable requested due to runtime status {}", status);
 		RequestDLSSGDisable();
 	}
+}
+
+uint32_t Streamline::ConsumeOSDGeneratedFrames()
+{
+	const auto frames = osdGeneratedFrames;
+	osdGeneratedFrames = 0;
+	return frames;
+}
+
+float Streamline::GetReflexLatencyMs()
+{
+	if (!featureReflex || !slReflexGetState) {
+		return 0.0f;
+	}
+
+	sl::ReflexState state{};
+	if (SL_FAILED(result, slReflexGetState(state)) || !state.latencyReportAvailable) {
+		pclLatencyReportAvailable = false;
+		return 0.0f;
+	}
+	pclLatencyReportAvailable = true;
+
+	for (auto i = sl::kReflexFrameReportCount - 1; i >= 0; --i) {
+		const auto& report = state.frameReport[i];
+		if (report.frameID == 0 || report.inputSampleTime == 0 || report.presentEndTime <= report.inputSampleTime) {
+			continue;
+		}
+
+		const auto latencyUs = report.presentEndTime - report.inputSampleTime;
+		return static_cast<float>(static_cast<double>(latencyUs) / 1000.0);
+	}
+
+	return 0.0f;
 }
 
 bool Streamline::ApplyNISSharpen(ID3D11Resource* a_inputColor, ID3D11Resource* a_outputColor, ID3D11DeviceContext* a_context, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness)
@@ -938,6 +1020,9 @@ void Streamline::Upscale(Texture2D* a_upscaleTexture, Texture2D* a_outputTexture
 
 		if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 			logger::critical("[Streamline] Could not enable DLSS");
+		} else {
+			currentDLSSQualityMode = a_qualityMode;
+			currentDLSSModelPreset = a_dlssModelPreset;
 		}
 
 		static auto loggedDLSSSettings = false;
@@ -1036,6 +1121,8 @@ bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputC
 		logger::warn("[Streamline] Could not set D3D12 DLSS options: {}", magic_enum::enum_name(result));
 		return false;
 	}
+	currentDLSSQualityMode = a_qualityMode;
+	currentDLSSModelPreset = a_dlssModelPreset;
 
 	sl::Extent lowResExtent{ 0, 0, static_cast<uint32_t>(a_renderSize.x), static_cast<uint32_t>(a_renderSize.y) };
 	sl::Extent fullExtent{ 0, 0, static_cast<uint32_t>(a_displaySize.x), static_cast<uint32_t>(a_displaySize.y) };

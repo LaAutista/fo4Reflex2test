@@ -136,6 +136,19 @@
 			}
 		},
 		{
+			"text": "DEBUG",
+			"type": "section"
+		},
+		{
+			"id": "bOnScreenDisplay:Settings",
+			"text": "On screen display",
+			"type": "switcher",
+			"help": "Shows lightweight DX12 swapchain stats while DLSS or FSR is active. (Default: Disabled)",
+			"valueOptions": {
+				"sourceType": "ModSettingInt"
+			}
+		},
+		{
 			"text": "DYNAMIC MULTI FRAME GENERATION",
 			"type": "section"
 		},
