@@ -108,10 +108,11 @@ public:
 
 		bool Any() const { return dlss || fsr || fsrFrameGeneration; }
 	};
-	D3D12EvaluationResult EvaluateD3D12WorkForCurrentFrame(bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration);
+	D3D12EvaluationResult EvaluateD3D12WorkForCurrentFrame(bool a_evaluateDLSS, bool a_evaluateFSR, bool a_evaluateFSRFrameGeneration, bool a_waitForD3D11Consumption = true);
 	bool EvaluateD3D12DLSSForCurrentFrame();
 	bool EvaluateD3D12FSRForCurrentFrame();
 	bool EvaluateFSRFrameGenerationForCurrentFrame();
+	void SetPresentOverride(ID3D12Resource* a_finalColor);
 	bool EnsureFidelityFXFrameGenerationSwapChain();
 	HRESULT GetBuffer(UINT a_buffer, REFIID a_riid, void** a_surface);
 	HRESULT GetDevice(REFIID a_riid, void** a_device);
@@ -128,6 +129,8 @@ private:
 	{
 		winrt::com_ptr<ID3D12CommandAllocator> allocator;
 		winrt::com_ptr<ID3D12GraphicsCommandList4> list;
+		std::unique_ptr<D3D11D3D12SharedTexture> presentStaging;
+		UINT index = 0;
 		UINT64 fenceValue = 0;
 	};
 
@@ -148,9 +151,9 @@ private:
 	winrt::com_ptr<ID3D12Resource> swapChainBuffers[kDX12FrameCount];
 	std::unique_ptr<Texture2D> swapChainBufferProxy;
 	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferProxyENB;
-	std::unique_ptr<D3D11D3D12SharedTexture> swapChainBufferWrapped[kDX12FrameCount];
 	CommandContext commandContexts[kCommandContextCount];
 	winrt::handle commandFenceEvent;
+	winrt::com_ptr<ID3D12Resource> presentOverrideFinalColor;
 	DXGISwapChainProxy* swapChainProxy = nullptr;
 	UINT frameIndex = 0;
 	UINT nextCommandContext = 0;

@@ -170,7 +170,7 @@ public:
 	bool HasPendingDLSSGDisable() const { return pendingDLSSGDisable; }
 	void ApplyPendingDLSSGDisable();
 	bool NeedsDLSSGPresentSafety() const;
-	bool NeedsPresentMarkers() const { return featurePCL && slPCLSetMarker && currentReflexUseMarkersToOptimize; }
+	bool NeedsPresentMarkers() const { return NeedsDLSSGPresentSafety() && featurePCL && slPCLSetMarker && presentFrameToken; }
 	void OnDLSSGPresentComplete();
 	uint32_t GetCurrentFrameTokenIndex() const { return currentFrameTokenIndex; }
 	sl::FrameToken* GetFrameTokenForFrame(uint32_t a_frameIndex);
@@ -193,6 +193,7 @@ public:
 	sl::ReflexMode GetCurrentReflexMode() const { return currentReflexMode; }
 	float GetReflexLatencyMs();
 	uint32_t GetOSDGeneratedFramesPerRenderFrame() const { return dlssgActive ? (currentDLSSGGeneratedFrames != 0 ? currentDLSSGGeneratedFrames : 1) : 0; }
+	uint32_t GetDLSSGPresentedFrameMultiplier() const { return lastDLSSGPresentedFrames != std::numeric_limits<uint32_t>::max() && lastDLSSGPresentedFrames != 0 ? lastDLSSGPresentedFrames : 1; }
 	uint GetCurrentDLSSQualityMode() const { return currentDLSSQualityMode; }
 	uint GetCurrentDLSSModelPreset() const { return currentDLSSModelPreset; }
 	uint32_t GetPCLStatsWindowMessage() const { return pclStatsWindowMessage; }
@@ -283,6 +284,9 @@ private:
 	bool EnsureFrameToken(uint32_t a_frameIndex);
 	bool ApplyNISSharpen(ID3D11Resource* a_inputColor, ID3D11Resource* a_outputColor, ID3D11DeviceContext* a_context, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness);
 	bool ApplyNISSharpenD3D12(ID3D12Resource* a_inputColor, ID3D12Resource* a_outputColor, ID3D12GraphicsCommandList* a_commandList, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness);
+	bool EnsureD3D12DLSSOptions(sl::DLSSMode a_mode, uint32_t a_outputWidth, uint32_t a_outputHeight, uint a_dlssModelPreset);
+	bool EnsureNISOptions(float a_sharpness, std::string_view a_logContext);
+	void ResetOptionCaches();
 	void SetPCLMarker(sl::PCLMarker a_marker, sl::FrameToken* a_frameToken = nullptr);
 	bool DisableDLSSGNow();
 	uint32_t constantsFrameIndex = std::numeric_limits<uint32_t>::max();
@@ -306,6 +310,13 @@ private:
 	uint32_t currentDLSSGDynamicTargetFPS = 0;
 	uint currentDLSSQualityMode = 1;
 	uint currentDLSSModelPreset = 0;
+	bool currentD3D12DLSSOptionsValid = false;
+	sl::DLSSMode currentD3D12DLSSMode = sl::DLSSMode::eOff;
+	uint32_t currentD3D12DLSSOutputWidth = 0;
+	uint32_t currentD3D12DLSSOutputHeight = 0;
+	uint currentD3D12DLSSModelPreset = std::numeric_limits<uint>::max();
+	bool currentNISOptionsValid = false;
+	float currentNISSharpness = -1.0f;
 	uint32_t pclStatsWindowMessage = 0;
 	uint32_t pclPingCount = 0;
 	bool pclLatencyReportAvailable = false;

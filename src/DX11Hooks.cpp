@@ -51,6 +51,11 @@ namespace
 			}
 		}
 
+		if (a_wantsD3D12FrameGeneration && !a_streamline->featureDLSSG) {
+			logger::info("[DX12SwapChain] Streamline proxy disabled because FidelityFX frame generation will own the swapchain");
+			return nullptr;
+		}
+
 		if (!a_streamline->featureDLSS && !a_streamline->featureDLSSG) {
 			logger::info("[DX12SwapChain] Streamline proxy disabled because DLSS and DLSS-G are unavailable");
 			return nullptr;
@@ -79,7 +84,7 @@ struct hkIDXGIFactoryCreateSwapChain
 
 		try {
 			auto streamline = Streamline::GetSingleton();
-			logger::info("[DX12SwapChain] ENB factory swapchain hook requested");
+			logger::info("[DX12SwapChain] Factory swapchain hook requested");
 
 			winrt::com_ptr<ID3D11DeviceContext> d3d11Context;
 			d3d11Device->GetImmediateContext(d3d11Context.put());

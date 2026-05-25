@@ -424,9 +424,7 @@ void OSD::UpdateStats()
 	++renderedFrames;
 
 	auto streamline = Streamline::GetSingleton();
-	if (streamline->dlssgActive) {
-		generatedFrames += streamline->GetOSDGeneratedFramesPerRenderFrame();
-	} else if (Upscaling::GetSingleton()->ShouldUseFSRFrameGeneration(true)) {
+	if (!streamline->dlssgActive && Upscaling::GetSingleton()->ShouldUseFSRFrameGeneration(true)) {
 		generatedFrames += 1;
 	}
 
@@ -445,7 +443,11 @@ void OSD::UpdateStats()
 	const auto elapsedSeconds = std::chrono::duration<double>(elapsed).count();
 	renderFPS = renderedFrames / elapsedSeconds;
 	frameTimeMs = renderedFrames > 0 ? frameTimeAccumMs / renderedFrames : 0.0;
-	generatedFPS = (renderedFrames + generatedFrames) / elapsedSeconds;
+	if (streamline->dlssgActive) {
+		generatedFPS = renderFPS * static_cast<double>(streamline->GetDLSSGPresentedFrameMultiplier());
+	} else {
+		generatedFPS = (renderedFrames + generatedFrames) / elapsedSeconds;
+	}
 
 	if (adapter) {
 		DXGI_QUERY_VIDEO_MEMORY_INFO memoryInfo{};

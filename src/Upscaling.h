@@ -395,6 +395,7 @@ public:
 	std::array<std::unique_ptr<Texture2D>, kDX12FrameCount> debugMotionVectorSharedTextures;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssInputD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssSharpenedD3D12;
+	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssD3D12PresentFinal;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgHUDLessD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgMotionVectorD3D12;
 	std::array<winrt::com_ptr<ID3D12Resource>, kDX12FrameCount> dlssgDepthD3D12;

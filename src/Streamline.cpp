@@ -278,6 +278,9 @@ void Streamline::Shutdown()
 	currentDLSSGMode = sl::DLSSGMode::eCount;
 	currentDLSSGGeneratedFrames = 0;
 	currentDLSSGDynamicTargetFPS = 0;
+	currentDLSSQualityMode = 1;
+	currentDLSSModelPreset = 0;
+	ResetOptionCaches();
 }
 
 void Streamline::SetSwapChain(IDXGISwapChain* a_swapChain)
@@ -522,7 +525,10 @@ void Streamline::UpdateReflex(uint a_reflexMode, bool a_forceEnabled)
 		mode = sl::ReflexMode::eLowLatency;
 	}
 
-	const bool useMarkersToOptimize = mode != sl::ReflexMode::eOff;
+	// Official SL Reflex guidance says to leave marker-based optimization
+	// disabled unless the Reflex team advises otherwise. PCL markers are still
+	// emitted separately for latency reporting and DLSS-G frame matching.
+	const bool useMarkersToOptimize = false;
 	const uint32_t threadId = 0;
 	if (currentReflexMode == mode && currentReflexUseMarkersToOptimize == useMarkersToOptimize && currentReflexThreadId == threadId) {
 		return;
@@ -786,7 +792,7 @@ void Streamline::ClearDLSSGResourceTags(ID3D12GraphicsCommandList* a_commandList
 	}
 
 	static auto gameViewport = Util::State_GetSingleton();
-	if (!EnsureFrameToken(gameViewport->frameCount) || !frameToken) {
+	if (!frameToken) {
 		return;
 	}
 
@@ -851,8 +857,6 @@ void Streamline::OnPresentEnd(HRESULT, bool a_queryState)
 
 void Streamline::QueryDLSSGState(std::string_view a_phase)
 {
-	std::ignore = a_phase;
-
 	if (!featureDLSSG || !slDLSSGGetState) {
 		return;
 	}
@@ -878,6 +882,16 @@ void Streamline::QueryDLSSGState(std::string_view a_phase)
 
 	const auto status = static_cast<uint32_t>(state.status);
 	if (lastDLSSGStatus != status || lastDLSSGPresentedFrames != state.numFramesActuallyPresented) {
+		logger::debug(
+			"[Streamline] DLSS-G state phase={} status={}({}) requested={} actuallyPresented={} max={} dynamicMFG={} active={}",
+			a_phase,
+			status,
+			DLSSGStatusFlags(state.status),
+			currentDLSSGGeneratedFrames,
+			state.numFramesActuallyPresented,
+			state.numFramesToGenerateMax,
+			state.bIsDynamicMFGSupported == sl::Boolean::eTrue,
+			dlssgActive);
 		lastDLSSGStatus = status;
 		lastDLSSGPresentedFrames = state.numFramesActuallyPresented;
 	}
@@ -913,6 +927,67 @@ float Streamline::GetReflexLatencyMs()
 	return 0.0f;
 }
 
+void Streamline::ResetOptionCaches()
+{
+	currentD3D12DLSSOptionsValid = false;
+	currentD3D12DLSSMode = sl::DLSSMode::eOff;
+	currentD3D12DLSSOutputWidth = 0;
+	currentD3D12DLSSOutputHeight = 0;
+	currentD3D12DLSSModelPreset = std::numeric_limits<uint>::max();
+	currentNISOptionsValid = false;
+	currentNISSharpness = -1.0f;
+}
+
+bool Streamline::EnsureD3D12DLSSOptions(sl::DLSSMode a_mode, uint32_t a_outputWidth, uint32_t a_outputHeight, uint a_dlssModelPreset)
+{
+	if (currentD3D12DLSSOptionsValid &&
+		currentD3D12DLSSMode == a_mode &&
+		currentD3D12DLSSOutputWidth == a_outputWidth &&
+		currentD3D12DLSSOutputHeight == a_outputHeight &&
+		currentD3D12DLSSModelPreset == a_dlssModelPreset) {
+		return true;
+	}
+
+	sl::DLSSOptions dlssOptions{};
+	dlssOptions.mode = a_mode;
+	dlssOptions.outputWidth = a_outputWidth;
+	dlssOptions.outputHeight = a_outputHeight;
+	dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
+	ApplyDLSSModelPreset(dlssOptions, a_dlssModelPreset);
+
+	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
+		logger::warn("[Streamline] Could not set D3D12 DLSS options: {}", magic_enum::enum_name(result));
+		return false;
+	}
+
+	currentD3D12DLSSOptionsValid = true;
+	currentD3D12DLSSMode = a_mode;
+	currentD3D12DLSSOutputWidth = a_outputWidth;
+	currentD3D12DLSSOutputHeight = a_outputHeight;
+	currentD3D12DLSSModelPreset = a_dlssModelPreset;
+	return true;
+}
+
+bool Streamline::EnsureNISOptions(float a_sharpness, std::string_view a_logContext)
+{
+	if (currentNISOptionsValid && currentNISSharpness == a_sharpness) {
+		return true;
+	}
+
+	sl::NISOptions nisOptions{};
+	nisOptions.mode = sl::NISMode::eSharpen;
+	nisOptions.hdrMode = sl::NISHDR::eNone;
+	nisOptions.sharpness = a_sharpness;
+	if (SL_FAILED(result, slNISSetOptions(viewport, nisOptions))) {
+		logger::warn("[Streamline] Could not set {} NIS options: {}", a_logContext, magic_enum::enum_name(result));
+		return false;
+	}
+
+	currentNISOptionsValid = true;
+	currentNISSharpness = a_sharpness;
+	return true;
+}
+
 bool Streamline::ApplyNISSharpen(ID3D11Resource* a_inputColor, ID3D11Resource* a_outputColor, ID3D11DeviceContext* a_context, sl::FrameToken* a_frameToken, float2 a_displaySize, float a_sharpness)
 {
 	const auto sharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
@@ -920,12 +995,7 @@ bool Streamline::ApplyNISSharpen(ID3D11Resource* a_inputColor, ID3D11Resource* a
 		return false;
 	}
 
-	sl::NISOptions nisOptions{};
-	nisOptions.mode = sl::NISMode::eSharpen;
-	nisOptions.hdrMode = sl::NISHDR::eNone;
-	nisOptions.sharpness = sharpness;
-	if (SL_FAILED(result, slNISSetOptions(viewport, nisOptions))) {
-		logger::warn("[Streamline] Could not set NIS sharpen options: {}", magic_enum::enum_name(result));
+	if (!EnsureNISOptions(sharpness, "NIS sharpen")) {
 		return false;
 	}
 
@@ -958,12 +1028,7 @@ bool Streamline::ApplyNISSharpenD3D12(ID3D12Resource* a_inputColor, ID3D12Resour
 		return false;
 	}
 
-	sl::NISOptions nisOptions{};
-	nisOptions.mode = sl::NISMode::eSharpen;
-	nisOptions.hdrMode = sl::NISHDR::eNone;
-	nisOptions.sharpness = sharpness;
-	if (SL_FAILED(result, slNISSetOptions(viewport, nisOptions))) {
-		logger::warn("[Streamline] Could not set D3D12 NIS sharpen options: {}", magic_enum::enum_name(result));
+	if (!EnsureNISOptions(sharpness, "D3D12 NIS sharpen")) {
 		return false;
 	}
 
@@ -1118,15 +1183,9 @@ bool Streamline::UpscaleD3D12(ID3D12Resource* a_color, ID3D12Resource* a_outputC
 		break;
 	}
 
-	sl::DLSSOptions dlssOptions{};
-	dlssOptions.mode = dlssMode;
-	dlssOptions.outputWidth = static_cast<uint32_t>(a_displaySize.x);
-	dlssOptions.outputHeight = static_cast<uint32_t>(a_displaySize.y);
-	dlssOptions.colorBuffersHDR = sl::Boolean::eFalse;
-	ApplyDLSSModelPreset(dlssOptions, a_dlssModelPreset);
-
-	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
-		logger::warn("[Streamline] Could not set D3D12 DLSS options: {}", magic_enum::enum_name(result));
+	const auto outputWidth = static_cast<uint32_t>(a_displaySize.x);
+	const auto outputHeight = static_cast<uint32_t>(a_displaySize.y);
+	if (!EnsureD3D12DLSSOptions(dlssMode, outputWidth, outputHeight, a_dlssModelPreset)) {
 		return false;
 	}
 	currentDLSSQualityMode = a_qualityMode;
@@ -1250,6 +1309,7 @@ void Streamline::UpdateConstants(float2 a_jitter)
 
 void Streamline::DisableDLSS()
 {
+	currentD3D12DLSSOptionsValid = false;
 	if (!initialized || !featureDLSS || !slDLSSSetOptions) {
 		return;
 	}

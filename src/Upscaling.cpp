@@ -2111,20 +2111,62 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 		!fsrFrameGenerationActive ||
 		DX12SwapChain::GetSingleton()->EnsureFidelityFXFrameGenerationSwapChain();
 	bool d3d12FSRInputsReady = false;
+	bool presentOverrideUIPrepared = false;
 	auto fsrJitter = jitter;
 	auto dx12SwapChain = DX12SwapChain::GetSingleton();
-	auto copyD3D12FSROutput = [&]() {
+	auto prepareD3D12PresentOverrideUI = [&]() {
+		if (presentOverrideUIPrepared) {
+			return true;
+		}
+		if (auto* rtv = reinterpret_cast<ID3D11RenderTargetView*>(rendererData->renderTargets[a_renderTargetIndex].rtView)) {
+			const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			context->ClearRenderTargetView(rtv, clearColor);
+		}
+		presentOverrideUIPrepared = true;
+		return true;
+	};
+	auto setD3D12PresentOverride = [&](ID3D12Resource* a_finalColor) {
+		if (!a_finalColor) {
+			return false;
+		}
+		dx12SwapChain->SetPresentOverride(a_finalColor);
+		return true;
+	};
+	auto setD3D12DLSSPresentFinal = [&](ID3D12Resource* a_finalColor) {
+		const auto frameIndex = dx12SwapChain->GetFrameIndex();
+		if (frameIndex >= dlssD3D12PresentFinal.size()) {
+			return;
+		}
+		dlssD3D12PresentFinal[frameIndex].copy_from(a_finalColor);
+	};
+	auto getD3D12FSROutput = [&]() -> ID3D12Resource* {
+		const auto frameIndex = dx12SwapChain->GetFrameIndex();
+		if (frameIndex < fsrOutputD3D12.size()) {
+			return fsrOutputD3D12[frameIndex].get();
+		}
+		return nullptr;
+	};
+	auto getD3D12DLSSOutput = [&]() -> ID3D12Resource* {
+		const auto frameIndex = dx12SwapChain->GetFrameIndex();
+		if (settings.sharpness > 0.0f && frameIndex < dlssSharpenedD3D12.size() && dlssSharpenedD3D12[frameIndex]) {
+			return dlssSharpenedD3D12[frameIndex].get();
+		}
+		if (frameIndex < dlssgHUDLessD3D12.size()) {
+			return dlssgHUDLessD3D12[frameIndex].get();
+		}
+		return nullptr;
+	};
+	auto copyD3D12FSROutputToD3D11 = [&]() {
 		const auto frameIndex = dx12SwapChain->GetFrameIndex();
 		if (frameIndex < fsrOutputSharedTextures.size() && fsrOutputSharedTextures[frameIndex]) {
 			context->CopyResource(frameBufferResource, fsrOutputSharedTextures[frameIndex]->resource.get());
 		}
 	};
-	auto copyD3D12DLSSOutput = [&]() {
+	auto copyD3D12DLSSOutputToD3D11 = [&]() {
 		const auto frameIndex = dx12SwapChain->GetFrameIndex();
 		if (frameIndex < dlssSharpenedSharedTextures.size() && dlssD3D12Sharpened[frameIndex] && dlssSharpenedSharedTextures[frameIndex]) {
 			context->CopyResource(frameBufferResource, dlssSharpenedSharedTextures[frameIndex]->resource.get());
-		}
-		else if (frameIndex < dlssgHUDLessSharedTextures.size() && dlssgHUDLessSharedTextures[frameIndex]) {
+		} else if (frameIndex < dlssgHUDLessSharedTextures.size() && dlssgHUDLessSharedTextures[frameIndex]) {
 			context->CopyResource(frameBufferResource, dlssgHUDLessSharedTextures[frameIndex]->resource.get());
 		}
 	};
@@ -2146,9 +2188,12 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 		}
 		d3d12FSRInputsReady = CaptureD3D12FSRInputs(a_renderTargetIndex, motionVectorTexture, fsrJitter, renderSize, displaySize);
 		if (d3d12FSRInputsReady && !fsrFrameGenerationActive) {
-			const auto d3d12Result = dx12SwapChain->EvaluateD3D12WorkForCurrentFrame(false, true, false);
+			const auto usePresentOverride = getD3D12FSROutput() != nullptr;
+			const auto d3d12Result = dx12SwapChain->EvaluateD3D12WorkForCurrentFrame(false, true, false, !usePresentOverride);
 			if (d3d12Result.fsr) {
-				copyD3D12FSROutput();
+				if (!(usePresentOverride && prepareD3D12PresentOverrideUI() && setD3D12PresentOverride(getD3D12FSROutput()))) {
+					copyD3D12FSROutputToD3D11();
+				}
 			}
 		}
 	}
@@ -2183,15 +2228,32 @@ void Upscaling::Upscale(int a_renderTargetIndex)
 		}
 
 		CaptureDLSSGInputs(a_renderTargetIndex, motionVectorTexture, renderSize, displaySize);
+		const auto frameIndex = dx12SwapChain->GetFrameIndex();
+		const bool dlssPresentOverrideReady =
+			useD3D12DLSS &&
+			frameIndex < dlssD3D12InputsReady.size() &&
+			dlssD3D12InputsReady[frameIndex] &&
+			getD3D12DLSSOutput();
+		const bool hasPresentOverrideOutput =
+			dlssPresentOverrideReady ||
+			(d3d12FSRInputsReady && getD3D12FSROutput());
+		const auto usePresentOverride = hasPresentOverrideOutput;
 		const auto d3d12Result = dx12SwapChain->EvaluateD3D12WorkForCurrentFrame(
 			useD3D12DLSS,
 			d3d12FSRInputsReady && fsrFrameGenerationActive,
-			fsrFrameGenerationActive && fsrFrameGenerationSwapChainReady);
+			fsrFrameGenerationActive && fsrFrameGenerationSwapChainReady,
+			!usePresentOverride);
 		if (d3d12Result.fsr) {
-			copyD3D12FSROutput();
+			if (!(usePresentOverride && prepareD3D12PresentOverrideUI() && setD3D12PresentOverride(getD3D12FSROutput()))) {
+				copyD3D12FSROutputToD3D11();
+			}
 		}
 		if (d3d12Result.dlss) {
-			copyD3D12DLSSOutput();
+			auto* dlssOutput = getD3D12DLSSOutput();
+			setD3D12DLSSPresentFinal(dlssOutput);
+			if (!(usePresentOverride && prepareD3D12PresentOverrideUI() && setD3D12PresentOverride(dlssOutput))) {
+				copyD3D12DLSSOutputToD3D11();
+			}
 		}
 	}
 
@@ -2406,6 +2468,7 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 		dlssD3D12InputsReady[frameIndex] = false;
 		dlssD3D12Sharpened[frameIndex] = false;
 		dlssD3D12TransparencyMaskReady[frameIndex] = false;
+		dlssD3D12PresentFinal[frameIndex] = nullptr;
 		const bool reuseFSRResourcesForFrameGeneration =
 			useFSRFrameGeneration &&
 			upscaleMethod == UpscaleMethod::kFSR &&
@@ -2422,10 +2485,12 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 			EnsureSharedD3D12Texture(dlssInputDesc, dlssInputSharedTextures[frameIndex], dlssInputD3D12[frameIndex], false);
 			context->CopyResource(dlssInputSharedTextures[frameIndex]->resource.get(), upscalingTexture->resource.get());
 
-			auto sharpenedDesc = frameBufferDesc;
-			sharpenedDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-			sharpenedDesc.MiscFlags = 0;
-			EnsureSharedD3D12Texture(sharpenedDesc, dlssSharpenedSharedTextures[frameIndex], dlssSharpenedD3D12[frameIndex], true);
+			if (settings.sharpness > 0.0f) {
+				auto sharpenedDesc = frameBufferDesc;
+				sharpenedDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+				sharpenedDesc.MiscFlags = 0;
+				EnsureSharedD3D12Texture(sharpenedDesc, dlssSharpenedSharedTextures[frameIndex], dlssSharpenedD3D12[frameIndex], true);
+			}
 
 			dlssTransparencyMaskReady = false;
 			dlssD3D12TransparencyMaskReady[frameIndex] = false;
@@ -2650,8 +2715,8 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 		}
 
 		if (useFrameGeneration || useD3D12DLSS) {
-			streamline->UpdateConstants(jitter);
 			streamline->UpdateReflex(settings.reflexMode, useFrameGeneration);
+			streamline->UpdateConstants(jitter);
 		}
 		const auto dlssgInputSize = float2(static_cast<float>(sharedMotionVectorDesc.Width), static_cast<float>(sharedMotionVectorDesc.Height));
 		if (useFrameGeneration) {
@@ -2695,8 +2760,8 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 
 	context->CopyResource(dlssgHUDLessTexture->resource.get(), frameBufferResource);
 
-	streamline->UpdateConstants(jitter);
 	streamline->UpdateReflex(settings.reflexMode, true);
+	streamline->UpdateConstants(jitter);
 	streamline->UpdateDLSSG(true, settings.frameGenerationMode, settings.dlssgGeneratedFrames + 1, settings.dynamicMFGEnabled != 0, settings.dynamicMFGTargetFPS, a_renderSize, a_displaySize, frameBufferDesc.Format, motionVectorDesc.Format, depthDesc.Format);
 	streamline->TagDLSSGResources(dlssgHUDLessTexture->resource.get(), motionVectorTexture, depthTexture, a_renderSize, a_displaySize);
 
@@ -2726,10 +2791,11 @@ bool Upscaling::EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint
 		return false;
 	}
 
+	const bool useSharpenedOutput = settings.sharpness > 0.0f && dlssSharpenedOutput;
 	const auto succeeded = Streamline::GetSingleton()->UpscaleD3D12(
 		dlssInput,
 		dlssOutput,
-		dlssSharpenedOutput,
+		useSharpenedOutput ? dlssSharpenedOutput : nullptr,
 		motionVectors,
 		depth,
 		transparencyMask,
@@ -2744,6 +2810,20 @@ bool Upscaling::EvaluateD3D12DLSS(ID3D12GraphicsCommandList* a_commandList, uint
 		settings.sharpness,
 		settings.dlssModelPreset,
 		&dlssD3D12Sharpened[a_frameIndex]);
+	if (succeeded && useSharpenedOutput && !dlssD3D12Sharpened[a_frameIndex]) {
+		D3D12_RESOURCE_BARRIER beforeCopy[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(dlssOutput, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(dlssSharpenedOutput, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST)
+		};
+		a_commandList->ResourceBarrier(static_cast<UINT>(std::size(beforeCopy)), beforeCopy);
+		a_commandList->CopyResource(dlssSharpenedOutput, dlssOutput);
+		D3D12_RESOURCE_BARRIER afterCopy[] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(dlssOutput, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON),
+			CD3DX12_RESOURCE_BARRIER::Transition(dlssSharpenedOutput, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON)
+		};
+		a_commandList->ResourceBarrier(static_cast<UINT>(std::size(afterCopy)), afterCopy);
+		dlssD3D12Sharpened[a_frameIndex] = true;
+	}
 
 	dlssD3D12InputsReady[a_frameIndex] = false;
 	dlssD3D12TransparencyMaskReady[a_frameIndex] = false;
@@ -2883,8 +2963,12 @@ void Upscaling::TagDLSSGInputs(ID3D12GraphicsCommandList* a_commandList, uint32_
 
 	const auto frameTokenIndex = dlssgInputFrameTokenIndices[a_frameIndex];
 	auto streamline = Streamline::GetSingleton();
+	auto* hudlessColor = dlssD3D12PresentFinal[a_frameIndex].get();
+	if (!hudlessColor) {
+		hudlessColor = dlssgHUDLessD3D12[a_frameIndex].get();
+	}
 	streamline->TagDLSSGResources(
-		dlssgHUDLessD3D12[a_frameIndex].get(),
+		hudlessColor,
 		dlssgMotionVectorD3D12[a_frameIndex].get(),
 		dlssgDepthD3D12[a_frameIndex].get(),
 		dlssgUIColorAlphaD3D12[a_frameIndex].get(),
@@ -3009,6 +3093,7 @@ void Upscaling::DestroyUpscalingResources()
 		fsrDepthSharedTextures[i] = nullptr;
 		dlssInputD3D12[i] = nullptr;
 		dlssSharpenedD3D12[i] = nullptr;
+		dlssD3D12PresentFinal[i] = nullptr;
 		dlssgHUDLessD3D12[i] = nullptr;
 		dlssgMotionVectorD3D12[i] = nullptr;
 		dlssgDepthD3D12[i] = nullptr;
