@@ -656,7 +656,7 @@ void Upscaling::LoadSettings()
 	settings.dynamicMFGTargetFPS = static_cast<uint>(ini.GetLongValue("Settings", "iDynamicMFGTargetFPS", 300));
 	settings.reflexMode = static_cast<uint>(ini.GetLongValue("Settings", "iReflexMode", 1));
 	settings.dlssModelPreset = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iDLSSModelPreset", 0), 0, 4));
-	settings.osdEnabled = static_cast<uint>(ini.GetLongValue("Settings", "bOnScreenDisplay", 0) == 1);
+	settings.osdMode = static_cast<uint>(std::clamp<long>(ini.GetLongValue("Settings", "iOnScreenDisplay", 0), 0, 2));
 	settings.taggedTextureDebug = static_cast<uint>(ini.GetLongValue("Settings", "bTaggedTextureDebug", 0) == 1);
 	const auto legacySharpness = ini.GetDoubleValue("Settings", "fRCASSharpness", 0.2);
 	settings.sharpness = std::clamp(static_cast<float>(ini.GetDoubleValue("Settings", "fSharpness", legacySharpness)), 0.0f, 1.0f);
@@ -696,10 +696,13 @@ void Upscaling::OnDataLoaded()
 
 RE::BSEventNotifyControl Upscaling::ProcessEvent(const RE::MenuOpenCloseEvent& a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
+	auto singleton = GetSingleton();
+
 	// Reload settings when closing MCM menu
 	if (a_event.menuName == "PauseMenu") {
+		singleton->pauseMenuOpen = a_event.opening;
 		if (!a_event.opening) {
-			GetSingleton()->LoadSettings();
+			singleton->LoadSettings();
 		}
 	}
 
@@ -861,6 +864,11 @@ void Upscaling::UpdateRenderTargets(float a_currentWidthRatio, float a_currentHe
 	static auto previousHeightRatio = 0.0f;
 	static bool previousNeedsUpscalingTexture = false;
 	const bool needsUpscalingTexture = upscaleMethodNoMenu != UpscaleMethod::kDisabled;
+	const bool suspendedAtNativeForMenu =
+		a_currentWidthRatio == 1.0f &&
+		a_currentHeightRatio == 1.0f &&
+		upscaleMethod == UpscaleMethod::kDisabled &&
+		needsUpscalingTexture;
 
 	const bool nativeIdle =
 		a_currentWidthRatio == 1.0f &&
@@ -871,6 +879,10 @@ void Upscaling::UpdateRenderTargets(float a_currentWidthRatio, float a_currentHe
 		!dlssOutputTexture &&
 		!dilatedMotionVectorTexture;
 	if (nativeIdle && !previousNeedsUpscalingTexture) {
+		return;
+	}
+
+	if (suspendedAtNativeForMenu) {
 		return;
 	}
 
@@ -1835,28 +1847,35 @@ void Upscaling::UpdateUpscaling()
 	if (!streamline->featureDLSS && upscaleMethodNoMenu == UpscaleMethod::kDLSS) {
 		upscaleMethodNoMenu = UpscaleMethod::kFSR;
 	}
-	upscaleMethod = temporalFeaturesBlocked ? UpscaleMethod::kDisabled : upscaleMethodNoMenu;
 
-	const bool menuBlocksUpscaling = upscaleMethodNoMenu != UpscaleMethod::kDisabled && upscaleMethod == UpscaleMethod::kDisabled;
+	const bool frameGenerationSettingEnabled = settings.frameGenerationMode != 0 || settings.dynamicMFGEnabled != 0;
+	const bool upscalerSelected = upscaleMethodNoMenu != UpscaleMethod::kDisabled;
+	const bool menuKeepsUpscaling = pauseMenuOpen && temporalFeaturesBlocked && upscalerSelected;
+	const bool menuBlocksTemporal = temporalFeaturesBlocked && !menuKeepsUpscaling;
+
+	upscaleMethod = menuBlocksTemporal ? UpscaleMethod::kDisabled : upscaleMethodNoMenu;
+
+	const bool menuBlocksUpscaling = upscalerSelected && menuBlocksTemporal;
+	const bool dlssgHeldThroughMenu = menuBlocksUpscaling && frameGenerationSettingEnabled && streamline->featureDLSSG;
 	const bool menuSuspendsD3D12DLSS =
 		menuBlocksUpscaling &&
+		!dlssgHeldThroughMenu &&
 		upscaleMethodNoMenu == UpscaleMethod::kDLSS &&
 		streamline->UsesD3D12() &&
 		streamline->featureDLSS;
 	const bool resumeD3D12DLSSFromMenu = d3d12DLSSMenuSuspended && !menuBlocksUpscaling;
 
-	if (menuBlocksUpscaling) {
+	if (menuBlocksUpscaling && !dlssgHeldThroughMenu) {
 		dlssgMenuResumeReady = false;
 		dlssgStableGameplayFrames = 0;
-	} else if (!dlssgMenuResumeReady && upscaleMethod != UpscaleMethod::kDisabled) {
+	} else if (!dlssgMenuResumeReady && (upscaleMethod != UpscaleMethod::kDisabled || dlssgHeldThroughMenu)) {
 		dlssgStableGameplayFrames = std::min<uint32_t>(dlssgStableGameplayFrames + 1, kDLSSGResumeStableFrames);
 		dlssgMenuResumeReady = dlssgStableGameplayFrames >= kDLSSGResumeStableFrames;
-	} else if (upscaleMethod == UpscaleMethod::kDisabled) {
+	} else if (upscaleMethod == UpscaleMethod::kDisabled && !dlssgHeldThroughMenu) {
 		dlssgStableGameplayFrames = 0;
 	}
 
 	if (menuSuspendsD3D12DLSS && !d3d12DLSSMenuSuspended) {
-		streamline->DisableDLSS();
 		for (std::size_t i = 0; i < dlssgInputsReady.size(); ++i) {
 			dlssD3D12InputsReady[i] = false;
 			dlssD3D12Sharpened[i] = false;
@@ -1870,25 +1889,27 @@ void Upscaling::UpdateUpscaling()
 		d3d12DLSSMenuSuspended = false;
 	}
 
-	const bool frameGenerationSettingEnabled = settings.frameGenerationMode != 0 || settings.dynamicMFGEnabled != 0;
-	const bool frameGenerationBlocked = temporalFeaturesBlocked || !dlssgMenuResumeReady;
+	const bool dx12Ready = DX12SwapChain::GetSingleton()->IsReady();
+	const bool dlssgAllowed = frameGenerationSettingEnabled &&
+		streamline->featureDLSSG &&
+		(!menuBlocksTemporal || dlssgHeldThroughMenu) &&
+		(dlssgHeldThroughMenu || dlssgMenuResumeReady);
 	fsrFrameGenerationActive =
 		static_cast<UpscaleMethod>(settings.upscaleMethodPreference) != UpscaleMethod::kDisabled &&
 		frameGenerationSettingEnabled &&
-		DX12SwapChain::GetSingleton()->IsReady() &&
+		dx12Ready &&
 		(kForceFSRFrameGenerationForTesting || !streamline->featureDLSSG) &&
-		!frameGenerationBlocked;
+		!menuBlocksTemporal &&
+		dlssgMenuResumeReady;
 	frameGenerationActive =
 		!fsrFrameGenerationActive &&
-		frameGenerationSettingEnabled &&
-		streamline->featureDLSSG &&
-		!frameGenerationBlocked;
+		dlssgAllowed;
 	d3d12DLSSActive =
 		streamline->UsesD3D12() &&
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		streamline->featureDLSS;
 	frameGenerationInputsWanted =
-		DX12SwapChain::GetSingleton()->IsReady() &&
+		dx12Ready &&
 		(frameGenerationActive || fsrFrameGenerationActive || d3d12DLSSActive);
 
 	// Menus that render their own scene, like Pip-Boy, disable upscaling and need native render targets.
@@ -1903,7 +1924,9 @@ void Upscaling::UpdateUpscaling()
 	if (upscaleMethodNoMenu == UpscaleMethod::kDLSS || upscaleMethodNoMenu == UpscaleMethod::kFSR)
 		currentMipBias -= 1.0f;
 
-	UpdateSamplerStates(currentMipBias);
+	if (!menuBlocksUpscaling) {
+		UpdateSamplerStates(currentMipBias);
+	}
 	UpdateRenderTargets(resolutionScale, resolutionScale);
 	UpdateGameSettings();
 
@@ -1945,10 +1968,15 @@ void Upscaling::UpdateUpscaling()
 
 	streamline->UpdateReflex(settings.reflexMode, frameGenerationActive);
 	if (!frameGenerationActive) {
-		streamline->RequestDLSSGDisable();
+		if (streamline->dlssgActive || streamline->HasPendingDLSSGDisable()) {
+			streamline->RequestDLSSGDisable();
+		}
+
 		for (std::size_t i = 0; i < dlssgInputsReady.size(); ++i) {
-			dlssgInputsReady[i] = false;
-			if (!fsrFrameGenerationActive) {
+			if (dlssgInputsReady[i]) {
+				dlssgInputsReady[i] = false;
+			}
+			if (!fsrFrameGenerationActive && fsrFrameGenerationInputsReady[i]) {
 				fsrFrameGenerationInputsReady[i] = false;
 			}
 		}

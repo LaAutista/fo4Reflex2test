@@ -667,6 +667,9 @@ void Streamline::RequestDLSSGDisable()
 	if (!dlssgActive && (currentDLSSGMode == sl::DLSSGMode::eOff || currentDLSSGMode == sl::DLSSGMode::eCount)) {
 		return;
 	}
+	if (pendingDLSSGDisable) {
+		return;
+	}
 
 	pendingDLSSGDisable = true;
 }
@@ -706,7 +709,7 @@ void Streamline::ApplyPendingDLSSGDisable()
 
 	pendingDLSSGDisable = false;
 	if (DisableDLSSGNow()) {
-		dlssgPresentSafetyFrames = 2;
+		dlssgPresentSafetyFrames = 0;
 	}
 }
 
