@@ -34,6 +34,26 @@ struct ImageSpaceEffectTemporalAA_IsActive
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+/** @brief Keep workbench item 3D in the post-upscale Interface3D/UI phase */
+struct Interface3D_Renderer_Create
+{
+	static RE::Interface3D::Renderer* thunk(
+		const RE::BSFixedString& a_name,
+		RE::UI_DEPTH_PRIORITY a_depth,
+		float a_fov,
+		bool a_alwaysRenderWhenEnabled)
+	{
+		auto renderer = func(a_name, a_depth, a_fov, a_alwaysRenderWhenEnabled);
+		if (renderer &&
+			Upscaling::GetSingleton()->upscaleMethod != Upscaling::UpscaleMethod::kDisabled &&
+			a_name == "WorkbenchItem3D") {
+			renderer->postAA = true;
+		}
+		return renderer;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 float originalDynamicHeightRatio = 1.0f;
 float originalDynamicWidthRatio = 1.0f;
 
@@ -542,6 +562,7 @@ void Upscaling::InstallHooks()
 {
 	// Disable TAA shader if using alternative scaling method
 	stl::write_vfunc<0x8, ImageSpaceEffectTemporalAA_IsActive>(RE::VTABLE::ImageSpaceEffectTemporalAA[0]);
+	stl::detour_thunk<Interface3D_Renderer_Create>(REL::ID{ 88488, 2222519 });
 
 	const auto isOG = REX::FModule::IsRuntimeOG();
 
