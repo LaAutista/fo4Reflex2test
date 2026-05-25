@@ -1,6 +1,7 @@
 #include "Upscaling.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <SimpleIni.h>
@@ -60,6 +61,8 @@ float originalDynamicWidthRatio = 1.0f;
 namespace
 {
 	constexpr uint32_t kDLSSGResumeStableFrames = 2;
+	constexpr std::ptrdiff_t kServingThreadStateOffset = 0x68;
+	constexpr auto kLoadingScreenPumpInterval = std::chrono::milliseconds(500);
 
 	float* GetGlobalDynamicWidthRatio()
 	{
@@ -71,6 +74,73 @@ namespace
 		};
 		return ratio.get();
 	}
+
+	bool GetIniBoolAnySection(CSimpleIniA& a_ini, const char* a_key, bool a_default)
+	{
+		CSimpleIniA::TNamesDepend sections;
+		a_ini.GetAllSections(sections);
+		for (const auto& section : sections) {
+			if (a_ini.GetBoolValue(section.pItem, a_key, a_default) != a_default) {
+				return !a_default;
+			}
+		}
+
+		return a_ini.GetBoolValue(nullptr, a_key, a_default);
+	}
+
+	bool ShouldInstallHighFPSPhysicsFixLoadingScreenCompat()
+	{
+		const bool moduleLoaded = GetModuleHandleW(L"HighFPSPhysicsFix.dll") != nullptr;
+		const bool dllExists = GetFileAttributesW(L"Data\\F4SE\\Plugins\\HighFPSPhysicsFix.dll") != INVALID_FILE_ATTRIBUTES;
+		if (!moduleLoaded && !dllExists) {
+			return false;
+		}
+
+		CSimpleIniA ini;
+		ini.SetUnicode();
+		if (ini.LoadFile("Data\\F4SE\\Plugins\\HighFPSPhysicsFix.ini") < 0) {
+			logger::warn("[Upscaling] HighFPSPhysicsFix.dll detected, but HighFPSPhysicsFix.ini could not be read");
+			return false;
+		}
+
+		const bool enabled = GetIniBoolAnySection(ini, "DisableAnimationOnLoadingScreens", false);
+		if (enabled) {
+			logger::info("[Upscaling] HighFPSPhysicsFix loading screen animation patch detected; installing safe loading-screen detour");
+		}
+		return enabled;
+	}
+
+	struct JobListManager_ServingThread_DisplayLoadingScreen
+	{
+		static void thunk(void* a_this)
+		{
+			if (!a_this) {
+				return;
+			}
+
+			// HFPF's inner patch turns the original function into a one-shot
+			// loading-screen pump. Keep that first pump so Scaleform/UI render
+			// state is initialized, then preserve the vanilla wait contract.
+			func(a_this);
+
+			auto* state = reinterpret_cast<volatile std::uint32_t*>(
+				reinterpret_cast<std::byte*>(a_this) + kServingThreadStateOffset);
+			auto nextPump = std::chrono::steady_clock::now() + kLoadingScreenPumpInterval;
+			while (*state == 2) {
+				const auto now = std::chrono::steady_clock::now();
+				if (now >= nextPump) {
+					func(a_this);
+					nextPump = now + kLoadingScreenPumpInterval;
+				} else if (nextPump - now > std::chrono::milliseconds(1)) {
+					Sleep(1);
+				} else {
+					SwitchToThread();
+				}
+			}
+		}
+
+		static inline void (*func)(void*);
+	};
 
 	float* GetGlobalDynamicHeightRatio()
 	{
@@ -593,6 +663,10 @@ void Upscaling::InstallHooks()
 	// Keep it installed with ENB; the dynamic-resolution branches stay inactive at 1.0 scale.
 	stl::write_thunk_call<DrawWorld_Imagespace_LateRenderEffectRange>(
 		REL::ID{ 587723, 2318322 }.address() + (isOG ? 0xD3 : 0xB7));
+
+	if (ShouldInstallHighFPSPhysicsFixLoadingScreenCompat()) {
+		stl::detour_thunk<JobListManager_ServingThread_DisplayLoadingScreen>(REL::ID{ 132841, 2227631 });
+	}
 
 	// These hooks are not needed when using ENB because dynamic resolution is not supported
 	if (!enbLoaded) {
