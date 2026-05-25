@@ -140,12 +140,17 @@
 			"type": "section"
 		},
 		{
-			"id": "bOnScreenDisplay:Settings",
+			"id": "iOnScreenDisplay:Settings",
 			"text": "On screen display",
-			"type": "switcher",
-			"help": "Shows lightweight DX12 swapchain stats while DLSS or FSR is active. (Default: Disabled)",
+			"type": "stepper",
+			"help": "Shows DX12 swapchain stats while DLSS or FSR is active. Compact is a one-line summary; Detailed is the full debug view. (Default: Disabled)",
 			"valueOptions": {
-				"sourceType": "ModSettingInt"
+				"sourceType": "ModSettingInt",
+				"options": [
+					"Disabled",
+					"Compact",
+					"Detailed"
+				]
 			}
 		},
 		{

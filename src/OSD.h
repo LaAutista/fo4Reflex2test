@@ -43,6 +43,8 @@ private:
 	void UpdateTexture(ID3D12GraphicsCommandList* a_commandList);
 	void Draw(ID3D12GraphicsCommandList* a_commandList, ID3D12Resource* a_backBuffer, uint32_t a_backBufferIndex);
 	std::string BuildText() const;
+	std::string BuildCompactText() const;
+	std::string BuildDetailedText() const;
 
 	winrt::com_ptr<ID3D12Device> device;
 	winrt::com_ptr<IDXGIAdapter3> adapter;
@@ -57,8 +59,8 @@ private:
 	DXGI_FORMAT currentBackBufferFormat = DXGI_FORMAT_UNKNOWN;
 	uint32_t currentWidth = 0;
 	uint32_t currentHeight = 0;
-	uint32_t textureWidth = 512;
-	uint32_t textureHeight = 320;
+	uint32_t textureWidth = 0;
+	uint32_t textureHeight = 0;
 	uint32_t uploadRowPitch = 0;
 	uint64_t uploadSize = 0;
 	std::array<ID3D12Resource*, kDX12FrameCount> rtvBackBuffers{};
@@ -74,5 +76,6 @@ private:
 	uint64_t vramUsageMB = 0;
 	float reflexLatencyMs = 0.0f;
 	std::string cachedText;
+	uint32_t cachedMode = 0;
 	bool textureDirty = true;
 };

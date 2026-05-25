@@ -11,9 +11,26 @@
 
 namespace
 {
-	constexpr uint32_t kTextureWidth = 512;
-	constexpr uint32_t kTextureHeight = 320;
+	constexpr uint32_t kCompactTextureWidth = 540;
+	constexpr uint32_t kCompactTextureHeight = 32;
+	constexpr uint32_t kDetailedTextureWidth = 380;
+	constexpr uint32_t kDetailedTextureHeight = 220;
 	constexpr auto kSampleInterval = std::chrono::milliseconds(500);
+
+	uint32_t GetOSDMode()
+	{
+		return std::clamp<uint32_t>(Upscaling::GetSingleton()->settings.osdMode, 0, 2);
+	}
+
+	uint32_t GetOSDTextureWidth(uint32_t a_mode)
+	{
+		return a_mode == 1 ? kCompactTextureWidth : kDetailedTextureWidth;
+	}
+
+	uint32_t GetOSDTextureHeight(uint32_t a_mode)
+	{
+		return a_mode == 1 ? kCompactTextureHeight : kDetailedTextureHeight;
+	}
 
 	const char* QualityName(uint a_qualityMode)
 	{
@@ -163,7 +180,7 @@ namespace
 		DeleteObject(brush);
 
 		RECT textRect{ 8, 6, static_cast<LONG>(a_width - 8), static_cast<LONG>(a_height - 6) };
-		DrawTextA(memoryDC, a_text.c_str(), static_cast<int>(a_text.size()), &textRect, DT_LEFT | DT_TOP | DT_NOPREFIX);
+		DrawTextA(memoryDC, a_text.c_str(), static_cast<int>(a_text.size()), &textRect, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_EXPANDTABS);
 
 		auto* source = static_cast<uint32_t*>(bits);
 		for (uint32_t i = 0; i < a_width * a_height; ++i) {
@@ -192,7 +209,16 @@ bool OSD::EnsureResources(ID3D12Device* a_device, DXGI_FORMAT a_backBufferFormat
 		return false;
 	}
 
-	if (device.get() == a_device && pipelineState && currentBackBufferFormat == a_backBufferFormat && currentWidth == a_width && currentHeight == a_height) {
+	const auto mode = GetOSDMode();
+	const auto targetTextureWidth = GetOSDTextureWidth(mode);
+	const auto targetTextureHeight = GetOSDTextureHeight(mode);
+	if (device.get() == a_device &&
+		pipelineState &&
+		currentBackBufferFormat == a_backBufferFormat &&
+		currentWidth == a_width &&
+		currentHeight == a_height &&
+		textureWidth == targetTextureWidth &&
+		textureHeight == targetTextureHeight) {
 		return true;
 	}
 
@@ -200,6 +226,8 @@ bool OSD::EnsureResources(ID3D12Device* a_device, DXGI_FORMAT a_backBufferFormat
 	currentBackBufferFormat = a_backBufferFormat;
 	currentWidth = a_width;
 	currentHeight = a_height;
+	textureWidth = targetTextureWidth;
+	textureHeight = targetTextureHeight;
 	rtvBackBuffers = {};
 	textureDirty = true;
 
@@ -472,6 +500,31 @@ void OSD::UpdateStats()
 
 std::string OSD::BuildText() const
 {
+	return GetOSDMode() == 1 ? BuildCompactText() : BuildDetailedText();
+}
+
+std::string OSD::BuildCompactText() const
+{
+	auto upscaling = Upscaling::GetSingleton();
+	const auto fgFPS = upscaling->ShouldUseFrameGeneration(true) || upscaling->ShouldUseFSRFrameGeneration(true) ? generatedFPS : 0.0;
+	const auto latency = reflexLatencyMs > 0.0f ? reflexLatencyMs : 0.0f;
+
+	char line[192]{};
+	std::snprintf(
+		line,
+		sizeof(line),
+		"%s %.1f\t%s %.1f\tLatency %.1fms\tVRAM %.1fMB",
+		UpscalerMethodName(upscaling->upscaleMethod),
+		renderFPS,
+		FGMethodName(),
+		fgFPS,
+		latency,
+		static_cast<double>(vramUsageMB));
+	return line;
+}
+
+std::string OSD::BuildDetailedText() const
+{
 	auto upscaling = Upscaling::GetSingleton();
 	auto streamline = Streamline::GetSingleton();
 	const auto activeMethod = upscaling->upscaleMethod;
@@ -604,7 +657,8 @@ void OSD::Render(
 	uint32_t a_width,
 	uint32_t a_height)
 {
-	if (!Upscaling::GetSingleton()->settings.osdEnabled) {
+	const auto mode = GetOSDMode();
+	if (mode == 0) {
 		return;
 	}
 
@@ -619,6 +673,11 @@ void OSD::Render(
 
 	EnsureAdapter(a_device);
 	UpdateStats();
+	if (cachedMode != mode) {
+		cachedMode = mode;
+		cachedText = BuildText();
+		textureDirty = true;
+	}
 	UpdateTexture(a_commandList);
 	Draw(a_commandList, a_backBuffer, a_backBufferIndex);
 }
@@ -635,5 +694,6 @@ void OSD::Reset()
 	generatedFPS = 0.0;
 	reflexLatencyMs = 0.0f;
 	cachedText.clear();
+	cachedMode = 0;
 	textureDirty = true;
 }

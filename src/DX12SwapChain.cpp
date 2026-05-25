@@ -577,7 +577,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 	auto streamline = Streamline::GetSingleton();
 	auto upscaling = Upscaling::GetSingleton();
-	const auto osdEnabled = upscaling->settings.osdEnabled != 0;
+	const auto osdEnabled = upscaling->settings.osdMode != 0;
 	if (streamline->HasPendingDLSSGDisable()) {
 		streamline->ApplyPendingDLSSGDisable();
 	}
