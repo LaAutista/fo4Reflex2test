@@ -3154,7 +3154,7 @@ bool Upscaling::EvaluateReflex2Latewarp(ID3D12GraphicsCommandList* a_commandList
 
 	inputs.backbufferSize = { static_cast<uint32_t>(backbufferDesc.Width), backbufferDesc.Height };
 	inputs.hudlessColorSize = { static_cast<uint32_t>(dlssgInputDisplaySizes[a_frameIndex].x), static_cast<uint32_t>(dlssgInputDisplaySizes[a_frameIndex].y) };
-	inputs.uiColorAlphaSize = inputs.hudlessColorSize;
+	inputs.uiColorAlphaSize = uiColorAlpha ? inputs.hudlessColorSize : Reflex2::NgxDimensions{};
 	inputs.depthSize = { static_cast<uint32_t>(dlssgInputRenderSizes[a_frameIndex].x), static_cast<uint32_t>(dlssgInputRenderSizes[a_frameIndex].y) };
 	inputs.motionVectorSize = inputs.depthSize;
 	inputs.outputSize = inputs.backbufferSize;

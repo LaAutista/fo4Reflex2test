@@ -120,11 +120,18 @@ namespace Reflex2
 
 		params->Set("Latewarp.Backbuffer", a_inputs.backbuffer);
 		params->Set("Latewarp.HudlessColor", a_inputs.hudlessColor);
-		params->Set("Latewarp.UIColorAlpha", a_inputs.uiColorAlpha);
 		params->Set("Depth", a_inputs.depth);
 		params->Set("MotionVectors", a_inputs.motionVectors);
-		params->Set("Latewarp.NoWarpMask", a_inputs.noWarpMask);
 		params->Set("Output", a_inputs.outputColor);
+		params->Set("Backbuffer", a_inputs.backbuffer);
+		if (a_inputs.uiColorAlpha) {
+			params->Set("Latewarp.UIColorAlpha", a_inputs.uiColorAlpha);
+			params->Set("UIColorAlpha", a_inputs.uiColorAlpha);
+		}
+		if (a_inputs.noWarpMask) {
+			params->Set("Latewarp.NoWarpMask", a_inputs.noWarpMask);
+			params->Set("NoWarpMask", a_inputs.noWarpMask);
+		}
 
 		SetSubrect(params, "Latewarp.Backbuffer.Subrect.Base.X", "Latewarp.Backbuffer.Subrect.Base.Y", "Latewarp.Backbuffer.Subrect.Width", "Latewarp.Backbuffer.Subrect.Height", {}, a_inputs.backbufferSize);
 		SetSubrect(params, "Latewarp.HudlessColor.Subrect.Base.X", "Latewarp.HudlessColor.Subrect.Base.Y", "Latewarp.HudlessColor.Subrect.Width", "Latewarp.HudlessColor.Subrect.Height", {}, a_inputs.hudlessColorSize);
