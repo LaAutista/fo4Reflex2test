@@ -6,6 +6,7 @@
 #include <d3dcompiler.h>
 
 #include "FidelityFX.h"
+#include "Reflex2Latewarp.h"
 #include "Streamline.h"
 #include "Upscaling.h"
 
@@ -14,7 +15,7 @@ namespace
 	constexpr uint32_t kCompactTextureWidth = 540;
 	constexpr uint32_t kCompactTextureHeight = 32;
 	constexpr uint32_t kDetailedTextureWidth = 380;
-	constexpr uint32_t kDetailedTextureHeight = 220;
+	constexpr uint32_t kDetailedTextureHeight = 240;
 	constexpr auto kSampleInterval = std::chrono::milliseconds(500);
 
 	uint32_t GetOSDMode()
@@ -558,6 +559,27 @@ std::string OSD::BuildDetailedText() const
 			} else {
 				std::snprintf(line, sizeof(line), "PC Latency: input N/A\n");
 			}
+			text += line;
+		}
+		if (upscaling->settings.reflex2LatewarpEnabled != 0) {
+			auto latewarp = Reflex2::Latewarp::GetSingleton();
+			const char* latewarpState = "not loaded";
+			if (latewarp->WasLastEvaluateSuccessful()) {
+				latewarpState = "OK";
+			} else if (latewarp->HasFeature()) {
+				latewarpState = "feature";
+			} else if (latewarp->IsLoaded()) {
+				latewarpState = "loaded";
+			}
+
+			std::snprintf(
+				line,
+				sizeof(line),
+				"Reflex2 LW: %s %llu/%llu 0x%08X\n",
+				latewarpState,
+				static_cast<unsigned long long>(latewarp->GetEvaluateSuccesses()),
+				static_cast<unsigned long long>(latewarp->GetEvaluateAttempts()),
+				static_cast<uint32_t>(latewarp->GetLastResult()));
 			text += line;
 		}
 		std::snprintf(line, sizeof(line), "DLSS Quality: %s\n", QualityName(streamline->GetCurrentDLSSQualityMode()));

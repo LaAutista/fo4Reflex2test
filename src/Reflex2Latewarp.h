@@ -154,6 +154,11 @@ namespace Reflex2
 		void Shutdown();
 		bool IsLoaded() const { return loaded; }
 		bool Evaluate(ID3D12GraphicsCommandList* a_commandList, const LatewarpInputs& a_inputs);
+		bool HasFeature() const { return latewarpHandle != nullptr; }
+		bool WasLastEvaluateSuccessful() const { return lastEvaluateSuccessful; }
+		uint64_t GetEvaluateAttempts() const { return evaluateAttempts; }
+		uint64_t GetEvaluateSuccesses() const { return evaluateSuccesses; }
+		NgxResult GetLastResult() const { return lastResult; }
 
 	private:
 		bool CreateFeature(ID3D12GraphicsCommandList* a_commandList, uint32_t a_width, uint32_t a_height);
@@ -167,6 +172,10 @@ namespace Reflex2
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
 		bool loaded = false;
+		bool lastEvaluateSuccessful = false;
+		uint64_t evaluateAttempts = 0;
+		uint64_t evaluateSuccesses = 0;
+		NgxResult lastResult = NgxResult::kNotInitialized;
 
 		using AllocateParametersFn = NgxResult(__cdecl*)(NgxParameter**);
 		using DestroyParametersFn = NgxResult(__cdecl*)(NgxParameter*);

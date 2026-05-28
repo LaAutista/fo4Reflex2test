@@ -99,7 +99,11 @@ namespace Reflex2
 
 	bool Latewarp::Evaluate(ID3D12GraphicsCommandList* a_commandList, const LatewarpInputs& a_inputs)
 	{
+		++evaluateAttempts;
+		lastEvaluateSuccessful = false;
+
 		if (!loaded || !a_commandList || !a_inputs.backbuffer || !a_inputs.hudlessColor || !a_inputs.depth || !a_inputs.motionVectors || !a_inputs.outputColor) {
+			lastResult = loaded ? NgxResult::kInvalidParameter : NgxResult::kNotInitialized;
 			return false;
 		}
 
@@ -110,6 +114,7 @@ namespace Reflex2
 		auto* params = AllocateParameters();
 		if (!params) {
 			logger::warn("[Reflex2] Could not allocate Latewarp evaluate parameters");
+			lastResult = NgxResult::kFail;
 			return false;
 		}
 
@@ -144,18 +149,22 @@ namespace Reflex2
 
 		const auto result = evaluateFeature(a_commandList, latewarpHandle, params, nullptr);
 		DestroyParameters(params);
+		lastResult = result;
 
 		if (!Succeeded(result)) {
 			logger::warn("[Reflex2] Latewarp evaluate failed: 0x{:08X}", static_cast<uint32_t>(result));
 			return false;
 		}
 
+		lastEvaluateSuccessful = true;
+		++evaluateSuccesses;
 		return true;
 	}
 
 	bool Latewarp::CreateFeature(ID3D12GraphicsCommandList* a_commandList, uint32_t a_width, uint32_t a_height)
 	{
 		if (!a_width || !a_height) {
+			lastResult = NgxResult::kInvalidParameter;
 			return false;
 		}
 
@@ -168,6 +177,7 @@ namespace Reflex2
 		auto* params = AllocateParameters();
 		if (!params) {
 			logger::warn("[Reflex2] Could not allocate Latewarp create parameters");
+			lastResult = NgxResult::kFail;
 			return false;
 		}
 
@@ -182,9 +192,11 @@ namespace Reflex2
 			latewarpHandle = nullptr;
 			outputWidth = 0;
 			outputHeight = 0;
+			lastResult = result;
 			return false;
 		}
 
+		lastResult = result;
 		outputWidth = a_width;
 		outputHeight = a_height;
 		logger::info("[Reflex2] Latewarp feature created at {}x{}", outputWidth, outputHeight);
