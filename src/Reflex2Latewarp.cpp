@@ -124,6 +124,7 @@ namespace Reflex2
 		params->Set("MotionVectors", a_inputs.motionVectors);
 		params->Set("Output", a_inputs.outputColor);
 		params->Set("Backbuffer", a_inputs.backbuffer);
+		params->Set("HudlessColor", a_inputs.hudlessColor);
 		if (a_inputs.uiColorAlpha) {
 			params->Set("Latewarp.UIColorAlpha", a_inputs.uiColorAlpha);
 			params->Set("UIColorAlpha", a_inputs.uiColorAlpha);
@@ -135,10 +136,14 @@ namespace Reflex2
 
 		SetSubrect(params, "Latewarp.Backbuffer.Subrect.Base.X", "Latewarp.Backbuffer.Subrect.Base.Y", "Latewarp.Backbuffer.Subrect.Width", "Latewarp.Backbuffer.Subrect.Height", {}, a_inputs.backbufferSize);
 		SetSubrect(params, "Latewarp.HudlessColor.Subrect.Base.X", "Latewarp.HudlessColor.Subrect.Base.Y", "Latewarp.HudlessColor.Subrect.Width", "Latewarp.HudlessColor.Subrect.Height", {}, a_inputs.hudlessColorSize);
-		SetSubrect(params, "Latewarp.UIColorAlpha.Subrect.Base.X", "Latewarp.UIColorAlpha.Subrect.Base.Y", "Latewarp.UIColorAlpha.Subrect.Width", "Latewarp.UIColorAlpha.Subrect.Height", {}, a_inputs.uiColorAlphaSize);
 		SetSubrect(params, "Latewarp.Depth.Subrect.Base.X", "Latewarp.Depth.Subrect.Base.Y", "Latewarp.Depth.Subrect.Width", "Latewarp.Depth.Subrect.Height", {}, a_inputs.depthSize);
 		SetSubrect(params, "Latewarp.MV.Subrect.Base.X", "Latewarp.MV.Subrect.Base.Y", "Latewarp.MV.Subrect.Width", "Latewarp.MV.Subrect.Height", {}, a_inputs.motionVectorSize);
-		SetSubrect(params, "Latewarp.NoWarpMask.Subrect.Base.X", "Latewarp.NoWarpMask.Subrect.Base.Y", "Latewarp.NoWarpMask.Subrect.Width", "Latewarp.NoWarpMask.Subrect.Height", {}, a_inputs.noWarpMaskSize);
+		if (a_inputs.uiColorAlpha) {
+			SetSubrect(params, "Latewarp.UIColorAlpha.Subrect.Base.X", "Latewarp.UIColorAlpha.Subrect.Base.Y", "Latewarp.UIColorAlpha.Subrect.Width", "Latewarp.UIColorAlpha.Subrect.Height", {}, a_inputs.uiColorAlphaSize);
+		}
+		if (a_inputs.noWarpMask) {
+			SetSubrect(params, "Latewarp.NoWarpMask.Subrect.Base.X", "Latewarp.NoWarpMask.Subrect.Base.Y", "Latewarp.NoWarpMask.Subrect.Width", "Latewarp.NoWarpMask.Subrect.Height", {}, a_inputs.noWarpMaskSize);
+		}
 		SetSubrect(params, "Latewarp.Output.Subrect.Base.X", "Latewarp.Output.Subrect.Base.Y", "Latewarp.Output.Subrect.Width", "Latewarp.Output.Subrect.Height", {}, a_inputs.outputSize);
 
 		params->Set("Latewarp.FrameID", a_inputs.frameID);
