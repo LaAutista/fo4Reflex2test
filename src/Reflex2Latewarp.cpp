@@ -27,6 +27,13 @@ namespace
 		a_parameters->Set(a_width, a_dimensions.Width);
 		a_parameters->Set(a_height, a_dimensions.Height);
 	}
+
+	void SetResource(Reflex2::NgxParameter* a_parameters, const char* a_name, ID3D12Resource* a_resource)
+	{
+		// The Reflex2Demo2 PDB shows Latewarp resources are passed through the void*
+		// NGX parameter overload, not the ID3D12Resource* overload.
+		a_parameters->Set(a_name, static_cast<void*>(a_resource));
+	}
 }
 
 namespace Reflex2
@@ -118,20 +125,20 @@ namespace Reflex2
 			return false;
 		}
 
-		params->Set("Latewarp.Backbuffer", a_inputs.backbuffer);
-		params->Set("Latewarp.HudlessColor", a_inputs.hudlessColor);
-		params->Set("Depth", a_inputs.depth);
-		params->Set("MotionVectors", a_inputs.motionVectors);
-		params->Set("Output", a_inputs.outputColor);
-		params->Set("Backbuffer", a_inputs.backbuffer);
-		params->Set("HudlessColor", a_inputs.hudlessColor);
+		SetResource(params, "Latewarp.Backbuffer", a_inputs.backbuffer);
+		SetResource(params, "Latewarp.HudlessColor", a_inputs.hudlessColor);
+		SetResource(params, "Depth", a_inputs.depth);
+		SetResource(params, "MotionVectors", a_inputs.motionVectors);
+		SetResource(params, "Output", a_inputs.outputColor);
+		SetResource(params, "Backbuffer", a_inputs.backbuffer);
+		SetResource(params, "HudlessColor", a_inputs.hudlessColor);
 		if (a_inputs.uiColorAlpha) {
-			params->Set("Latewarp.UIColorAlpha", a_inputs.uiColorAlpha);
-			params->Set("UIColorAlpha", a_inputs.uiColorAlpha);
+			SetResource(params, "Latewarp.UIColorAlpha", a_inputs.uiColorAlpha);
+			SetResource(params, "UIColorAlpha", a_inputs.uiColorAlpha);
 		}
 		if (a_inputs.noWarpMask) {
-			params->Set("Latewarp.NoWarpMask", a_inputs.noWarpMask);
-			params->Set("NoWarpMask", a_inputs.noWarpMask);
+			SetResource(params, "Latewarp.NoWarpMask", a_inputs.noWarpMask);
+			SetResource(params, "NoWarpMask", a_inputs.noWarpMask);
 		}
 
 		SetSubrect(params, "Latewarp.Backbuffer.Subrect.Base.X", "Latewarp.Backbuffer.Subrect.Base.Y", "Latewarp.Backbuffer.Subrect.Width", "Latewarp.Backbuffer.Subrect.Height", {}, a_inputs.backbufferSize);
