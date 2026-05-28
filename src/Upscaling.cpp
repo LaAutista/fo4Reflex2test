@@ -2787,6 +2787,21 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 		}
 
 		DXGI_FORMAT uiFormat = DXGI_FORMAT_UNKNOWN;
+		auto ensureFallbackUIColorAlpha = [&]() {
+			auto uiDesc = frameBufferDesc;
+			uiDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			uiDesc.MiscFlags = 0;
+			EnsureSharedD3D12Texture(uiDesc, dlssgUIColorAlphaSharedTextures[frameIndex], dlssgUIColorAlphaD3D12[frameIndex], true);
+			if (dlssgUIColorAlphaSharedTextures[frameIndex] && dlssgUIColorAlphaSharedTextures[frameIndex]->uav) {
+				const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				context->ClearUnorderedAccessViewFloat(dlssgUIColorAlphaSharedTextures[frameIndex]->uav.get(), clearColor);
+				uiFormat = uiDesc.Format;
+				return true;
+			}
+
+			dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
+			return false;
+		};
 		if (canExtractReticleUI) {
 			auto uiDesc = frameBufferDesc;
 			uiDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -2816,11 +2831,15 @@ void Upscaling::CaptureDLSSGInputs(int a_renderTargetIndex, ID3D11Texture2D* a_m
 					context->CSSetShader(nullShader, nullptr, 0);
 					uiFormat = uiDesc.Format;
 				} else {
-					dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
+					if (!useReflex2Latewarp || !ensureFallbackUIColorAlpha()) {
+						dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
+					}
 				}
 			}
 		} else {
-			dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
+			if (!useReflex2Latewarp || !ensureFallbackUIColorAlpha()) {
+				dlssgUIColorAlphaD3D12[frameIndex] = nullptr;
+			}
 		}
 
 		if (useFrameGeneration || useD3D12DLSS || useReflex2Latewarp) {
